@@ -1,0 +1,412 @@
+{
+  "enabled": {
+    "type": "bool",
+    "description": "插件总开关（关闭后不拦截消息、不注入工具）",
+    "default": true
+  },
+  "mumu_manager_path": {
+    "type": "string",
+    "description": "MuMuManager.exe 路径；留空自动探测（通常 C:\\Program Files\\Netease\\MuMu\\nx_main\\MuMuManager.exe）",
+    "default": ""
+  },
+  "adb_path": {
+    "type": "string",
+    "description": "adb.exe 路径；留空自动探测（通常与 MuMuManager.exe 同目录）",
+    "default": ""
+  },
+  "ffmpeg_path": {
+    "type": "string",
+    "description": "ffmpeg 可执行文件路径；留空自动探测（多帧拼图/录屏抽帧要用，没有则退化为连续截图）",
+    "default": ""
+  },
+  "vm_index": {
+    "type": "int",
+    "description": "MuMu 多开时的实例序号，默认 0",
+    "default": 0
+  },
+  "keep_window_hidden": {
+    "type": "bool",
+    "description": "启动后自动隐藏模拟器窗口（桌面不显示，只有 Agent 能通过截图看到）",
+    "default": true
+  },
+  "start_timeout_sec": {
+    "type": "int",
+    "description": "等待模拟器开机完成的超时秒数",
+    "default": 180
+  },
+  "prestart_vm_on_enter": {
+    "type": "bool",
+    "description": "进入手机模式时先同步开机（避免第一次工具调用等开机等到超时），默认开",
+    "default": true
+  },
+  "shutdown_on_exit": {
+    "type": "bool",
+    "description": "Agent 收手/超时结束时是否顺手关闭 MuMu 模拟器",
+    "default": true
+  },
+  "apply_performance_profile": {
+    "type": "bool",
+    "description": "启动时把模拟器调成 60fps/动态调帧/后台保活，让隐藏运行时更流畅",
+    "default": true
+  },
+  "max_frame_rate": {
+    "type": "int",
+    "description": "模拟器最大帧率（配合多帧截图与视频播放，默认 60）",
+    "default": 60
+  },
+  "auto_install_adb_keyboard": {
+    "type": "bool",
+    "description": "缺少 ADBKeyboard 时自动把插件自带的 apk 安装进虚拟机（中文输入必需）",
+    "default": true
+  },
+  "text_input_ime": {
+    "type": "string",
+    "description": "用于注入中文的输入法组件名",
+    "default": "com.android.adbkeyboard/.AdbIME"
+  },
+  "enable_shell_tool": {
+    "type": "bool",
+    "description": "是否允许 Agent 使用 mumu_phone_shell 在安卓里执行任意 shell 命令",
+    "default": true
+  },
+  "shell_output_max_chars": {
+    "type": "int",
+    "description": "shell 命令输出返回给模型的最大字符数",
+    "default": 6000
+  },
+  "single_frame_max_width": {
+    "type": "int",
+    "description": "单帧截图返回给模型时的最大宽度（越大越清晰、越费 token，建议 1024~1600）",
+    "default": 1280
+  },
+  "burst_max_frames": {
+    "type": "int",
+    "description": "多帧截图的帧数上限",
+    "default": 20
+  },
+  "grid_max_width": {
+    "type": "int",
+    "description": "多帧拼图整张图的最大宽度（兼容旧版拼图，现主要用于参考）",
+    "default": 2000
+  },
+  "frames_max_duration_sec": {
+    "type": "int",
+    "description": "连续采样单次最长时长（秒，Agent 工具参数 duration 的上限）",
+    "default": 20
+  },
+  "frames_max_count": {
+    "type": "int",
+    "description": "连续采样单次最多帧数（Agent 参数 count 的上限）",
+    "default": 24
+  },
+  "frames_max_images": {
+    "type": "int",
+    "description": "连续采样单次最多返回几张图片（一张图信息不够时会按顺序返回多张）",
+    "default": 8
+  },
+  "frames_image_width": {
+    "type": "int",
+    "description": "frames 模式每帧图片宽度（越大越清楚、越费 token）",
+    "default": 768
+  },
+  "frames_sheet_tile_width": {
+    "type": "int",
+    "description": "sheet 拼图模式每格宽度（拼图版省上下文但细节少）",
+    "default": 480
+  },
+  "grid_label_frames": {
+    "type": "bool",
+    "description": "多帧拼图是否给每格标注帧序号/时间",
+    "default": true
+  },
+  "natural_language_entry": {
+    "type": "bool",
+    "description": "允许用自然语言（如“去玩手机”“看看手机”）直接进入手机模式",
+    "default": true
+  },
+  "enter_keywords": {
+    "type": "string",
+    "description": "进入手机模式的关键词，逗号分隔",
+    "default": "玩手机,操作手机,用手机,打开手机,看看手机,看下手机,看手机,手机看看,打开模拟器,操作模拟器,用模拟器,安卓虚拟机,去刷手机,帮我玩手机"
+  },
+  "enter_require_admin": {
+    "type": "bool",
+    "description": "只允许管理员/私聊触发“去玩手机”（防止群友一句话就开机），默认开",
+    "default": true
+  },
+  "interrupt_all_sessions": {
+    "type": "bool",
+    "description": "玩手机时是否拦截所有会话的消息；关闭=只拦截管理员/私聊/当前会话（群聊其他消息正常走 LLM）",
+    "default": false
+  },
+  "stop_keywords": {
+    "type": "string",
+    "description": "让 Agent 收手的关键词，逗号分隔",
+    "default": "别玩了,不玩了,退出玩手机,停止玩手机,停止操作,手机收起来,收手,回来吧,别玩手机了,结束玩手机"
+  },
+  "stop_reply_text": {
+    "type": "string",
+    "description": "用户喊停后机器人的直接回复",
+    "default": "好，手机收起来了。"
+  },
+  "command_wake_prefix": {
+    "type": "string",
+    "description": "命令前缀（以它开头的消息会放行给命令系统，玩手机时也不拦）",
+    "default": "/"
+  },
+  "mode_default_minutes": {
+    "type": "int",
+    "description": "自然语言进入手机模式后的默认时长（分钟）",
+    "default": 30
+  },
+  "mode_idle_timeout_sec": {
+    "type": "int",
+    "description": "手机模式下既没在自主玩、也没有工具动作/消息多久后自动收手（秒）",
+    "default": 180
+  },
+  "continue_after_turn": {
+    "type": "bool",
+    "description": "主 Agent 回合结束后，是否自动切到后台自主模式继续玩（推荐开）",
+    "default": true
+  },
+  "interrupt_hint_text": {
+    "type": "string",
+    "description": "玩手机被打扰时自动回复的提示语（不会回复消息正文）",
+    "default": "正在玩手机，稍等～"
+  },
+  "interrupt_hint_cooldown_sec": {
+    "type": "int",
+    "description": "同一会话自动提示的最小间隔秒数，防止刷屏；消息仍会全部转给 Agent",
+    "default": 60
+  },
+  "summary_to_memory": {
+    "type": "bool",
+    "description": "玩手机结束后的操作总结是否写入长期记忆（不再发聊天消息），默认开",
+    "default": true
+  },
+  "summary_max_chars": {
+    "type": "int",
+    "description": "收尾总结写入长期记忆前的最大字数（0=不截断；默认不截断）",
+    "default": 0
+  },
+  "lesson_note_enable": {
+    "type": "bool",
+    "description": "是否给 Agent 提供 mumu_phone_lesson 工具（可选记录操作经验，收手时整理成《操作教程总结》单独写长期记忆）",
+    "default": true
+  },
+  "lesson_memory_sink": {
+    "type": "string",
+    "description": "《操作教程总结》写入目标：iris_l2 / local / none（默认 iris_l2）",
+    "default": "iris_l2"
+  },
+  "lesson_memory_tags": {
+    "type": "string",
+    "description": "《操作教程总结》的记忆标签（逗号分隔）",
+    "default": "玩手机,教程,经验,操作技巧"
+  },
+  "summary_memory_sink": {
+    "type": "string",
+    "description": "总结写入哪里：iris_l2=调用 iris 插件的 save_memory 写 L2；local=只写插件本地 memory/sessions.md；both；none",
+    "default": "iris_l2"
+  },
+  "iris_memory_tool_name": {
+    "type": "string",
+    "description": "iris 记忆插件保存记忆的工具名（默认 save_memory）",
+    "default": "save_memory"
+  },
+  "notify_on_finish": {
+    "type": "bool",
+    "description": "收手时是否给用户发一句短提示（总结本身默认不发，只写记忆），默认关",
+    "default": false
+  },
+  "finish_notify_text": {
+    "type": "string",
+    "description": "收手短提示文案（仅 notify_on_finish=true 时发送）",
+    "default": "手机收起来了。"
+  },
+  "slim_trim_contexts": {
+    "type": "bool",
+    "description": "手机模式下裁剪对话历史，只保留最近若干条（提速关键）",
+    "default": true
+  },
+  "slim_context_keep_messages": {
+    "type": "int",
+    "description": "手机模式下保留的最近消息条数",
+    "default": 8
+  },
+  "slim_extra_content_parts": {
+    "type": "bool",
+    "description": "手机模式下丢弃每轮附加的系统提醒内容（进一步省 token）",
+    "default": true
+  },
+  "slim_system_prompt": {
+    "type": "bool",
+    "description": "手机模式下注入精简的手机操作提示块",
+    "default": true
+  },
+  "vm_mode_replace_system_prompt": {
+    "type": "bool",
+    "description": "手机模式下用“单独人格提示词 + 手机操作规则”整体替换系统提示词（不带 AstrBot 原长系统提示）；关=追加在原系统提示词后面",
+    "default": true
+  },
+  "phone_persona_prompt": {
+    "type": "string",
+    "description": "手机模式/自主玩的单独人格提示词（不读 AstrBot 系统提示词；留空则回退当前会话人格，也可填一份精简的角色设定）",
+    "default": ""
+  },
+  "phone_persona_fallback_astrbot": {
+    "type": "bool",
+    "description": "phone_persona_prompt 为空时，是否回退使用 AstrBot 当前会话的人格提示词；关掉=只用内置/手机规则",
+    "default": true
+  },
+  "phone_iris_context_enable": {
+    "type": "bool",
+    "description": "玩手机时是否注入少量 iris 记忆/画像（让 Agent 评论时知道用户是谁、最近在干嘛；只取少量，不会搬大段记忆）",
+    "default": true
+  },
+  "phone_iris_profile_enable": {
+    "type": "bool",
+    "description": "少量背景里是否包含用户画像摘要",
+    "default": true
+  },
+  "phone_iris_memory_enable": {
+    "type": "bool",
+    "description": "少量背景里是否包含最近相关记忆（默认只取 3 条）",
+    "default": true
+  },
+  "phone_iris_memory_top_k": {
+    "type": "int",
+    "description": "注入的 iris 记忆条数上限（1~8，默认 3）",
+    "default": 3
+  },
+  "phone_iris_context_max_chars": {
+    "type": "int",
+    "description": "注入的 iris 背景总字数上限（默认 600 字，避免提示词膨胀）",
+    "default": 600
+  },
+  "phone_iris_context_ttl_sec": {
+    "type": "int",
+    "description": "iris 背景缓存时长（秒），避免每次请求都查记忆",
+    "default": 600
+  },
+  "phone_comment_guard": {
+    "type": "bool",
+    "description": "是否在手机模式提示词里加入“评论只围绕当前内容、不要写无关信息/隐私”规则",
+    "default": true
+  },
+  "phone_iris_inject_query": {
+    "type": "string",
+    "description": "注入 iris 记忆时用的检索语句模板；可用 {owner}（用户称呼）和 {goal}（本次玩手机目标）占位",
+    "default": "{owner} 最近在做什么 近况 项目 喜好"
+  },
+  "phone_iris_inject_keywords": {
+    "type": "string",
+    "description": "注入 iris 记忆时追加检索的关键词（逗号分隔；会自动拼到检索语句后面，已包含的不会重复）",
+    "default": "近况,项目,喜好,视频,评论"
+  },
+  "phone_iris_tools_enable": {
+    "type": "bool",
+    "description": "玩手机时是否把记忆插件的查询工具暴露给 Agent（可临时查记忆/画像/补记忆）",
+    "default": true
+  },
+  "phone_iris_tool_names": {
+    "type": "string",
+    "description": "额外暴露的工具名（逗号分隔；默认 iris 的 search_memory,get_profile,save_memory；不存在的工具会自动忽略）",
+    "default": "search_memory,get_profile,save_memory"
+  },
+  "slim_system_prompt_max_chars": {
+    "type": "int",
+    "description": "手机模式下 system prompt 最大字符数，0=不限制",
+    "default": 0
+  },
+  "vm_mode_extra_tools": {
+    "type": "string",
+    "description": "手机模式下额外保留的其他工具名，逗号分隔（如 send_message_to_user）",
+    "default": "send_message_to_user"
+  },
+  "expose_compact_tools_in_normal_mode": {
+    "type": "bool",
+    "description": "普通聊天时也注入 3 个轻量手机工具（状态/开始/自主玩），默认开",
+    "default": true
+  },
+  "autoplay_enable": {
+    "type": "bool",
+    "description": "允许空闲时自动开始自主玩手机",
+    "default": true
+  },
+  "autoplay_goals": {
+    "type": "string",
+    "description": "空闲自主玩手机的目标池，逗号分隔，轮流使用",
+    "default": "随便刷一会儿手机，看看有什么新鲜事,逛逛应用商店/短视频，玩一会儿游戏,打开相册看看，听会儿歌"
+  },
+  "autoplay_session_minutes": {
+    "type": "int",
+    "description": "每次空闲自主玩手机的默认时长（分钟）",
+    "default": 20
+  },
+  "autoplay_idle_minutes": {
+    "type": "int",
+    "description": "用户多久没发消息后开始空闲自主玩手机（分钟，0=不按空闲触发）",
+    "default": 45
+  },
+  "autoplay_active_hours": {
+    "type": "string",
+    "description": "允许空闲自主玩手机的时间窗，如 09:00-23:30（跨午夜如 22:00-02:00 也支持）",
+    "default": "09:00-23:30"
+  },
+  "autoplay_runs_per_day": {
+    "type": "int",
+    "description": "每天最多自主玩几次",
+    "default": 3
+  },
+  "autoplay_daily_budget_minutes": {
+    "type": "int",
+    "description": "每天自主玩手机的总时长预算（分钟）",
+    "default": 60
+  },
+  "autoplay_max_steps_per_round": {
+    "type": "int",
+    "description": "自主玩手机每一小轮最多工具调用步数（越大单轮越久、越容易跑偏）",
+    "default": 28
+  },
+  "autoplay_round_gap_sec": {
+    "type": "int",
+    "description": "自主玩手机两轮之间的停顿（秒），给用户/消息留出插入机会",
+    "default": 5
+  },
+  "autoplay_provider_id": {
+    "type": "string",
+    "description": "自主玩手机使用的模型 Provider ID；留空=跟随当前会话模型。建议选支持图片+工具调用的模型（如 deepseek/deepseek-flash）",
+    "default": ""
+  },
+  "autoplay_notify_on_start": {
+    "type": "bool",
+    "description": "定时/空闲自动玩手机开始时，是否往聊天里发“我去玩手机了”提示（默认关，避免半夜刷屏）",
+    "default": false
+  },
+  "autoplay_notify_on_finish": {
+    "type": "bool",
+    "description": "定时/空闲自动玩手机结束时，是否往聊天里发“手机收起来了”提示（默认关）",
+    "default": false
+  },
+  "autoplay_notify_on_error": {
+    "type": "bool",
+    "description": "定时/空闲自动玩手机出错时，是否往聊天里发报错提示（默认关，只写日志/diag）",
+    "default": false
+  },
+  "autoplay_use_persona": {
+    "type": "bool",
+    "description": "自主玩手机时是否把当前会话的人格提示词一起注入（保持角色口吻），默认开",
+    "default": true
+  },
+  "autoplay_system_prompt": {
+    "type": "string",
+    "description": "自主玩手机的系统提示词；留空用内置。可用 {goal} 占位符",
+    "default": ""
+  },
+  "tool_call_timeout_sec": {
+    "type": "int",
+    "description": "自主玩手机时单次工具调用超时（秒），录屏/截图/开机可能较慢",
+    "default": 150
+  }
+}
