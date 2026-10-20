@@ -69,6 +69,11 @@
     "description": "是否允许 Agent 使用 mumu_phone_shell 在安卓里执行任意 shell 命令",
     "default": true
   },
+  "shell_tool_require_admin": {
+    "type": "bool",
+    "description": "mumu_phone_shell 是否只允许管理员/私聊/所有者使用（adb shell 权限较大，安全起见默认开；关掉则任何能触发工具的事件都可用）",
+    "default": true
+  },
   "shell_output_max_chars": {
     "type": "int",
     "description": "shell 命令输出返回给模型的最大字符数",
@@ -248,6 +253,11 @@
     "type": "bool",
     "description": "手机模式下用“单独人格提示词 + 手机操作规则”整体替换系统提示词（不带 AstrBot 原长系统提示）；关=追加在原系统提示词后面",
     "default": true
+  },
+  "vm_mode_cache_friendly": {
+    "type": "bool",
+    "description": "手机模式改用缓存友好注入：不替换系统提示词、不裁剪历史/附加内容，手机提示块保持稳定（利于模型前缀缓存命中，但 token 会更多）。默认关（精简模式）",
+    "default": false
   },
   "phone_persona_prompt": {
     "type": "string",

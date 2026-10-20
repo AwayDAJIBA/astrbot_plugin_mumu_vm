@@ -131,6 +131,7 @@
 | `slim_trim_contexts` / `slim_context_keep_messages` | true / 8 | 手机模式裁剪历史 |
 | `slim_extra_content_parts` | true | 手机模式丢弃每轮附加系统提醒 |
 | `vm_mode_replace_system_prompt` | true | 手机模式用"单独人格+手机规则"整体替换系统提示词（不用 AstrBot 长系统提示） |
+| `vm_mode_cache_friendly` | false | 缓存友好模式：改用追加注入、不裁剪历史/附加内容、手机提示块保持稳定（利于模型前缀缓存，token 更多） |
 | `phone_persona_prompt` / `phone_persona_fallback_astrbot` | 空（回退会话人格）/ true | 手机模式和自主玩的单独人格提示词（不读系统提示词，可自己填角色卡；留空则回退会话人格） |
 | `phone_iris_inject_query` / `phone_iris_inject_keywords` | `{owner} 最近在做什么 近况 项目 喜好` / 近况,项目,喜好,视频,评论 | 注入 iris 时的检索语句模板（支持 `{owner}` / `{goal}`）与追加关键词 |
 | `phone_iris_tools_enable` / `phone_iris_tool_names` | true / search_memory,get_profile,save_memory | 玩手机时额外暴露给 Agent 的记忆插件工具 |
@@ -144,7 +145,7 @@
 | `autoplay_provider_id` | 空（跟随会话模型） | 自主玩用的 Provider，建议选支持图片+工具调用的模型 |
 | `autoplay_notify_on_start` / `autoplay_notify_on_finish` / `autoplay_notify_on_error` | false / false / false | 定时/空闲自动会话开始、结束、出错时是否往聊天里发提示（默认全静默，避免半夜刷屏） |
 | `autoplay_use_persona` | true | 自主玩手机时把当前会话人格提示词一起注入（保持角色口吻） |
-| `enable_shell_tool` | true | 是否允许 `mumu_phone_shell` |
+| `enable_shell_tool` / `shell_tool_require_admin` | true / true | 是否允许 `mumu_phone_shell`；是否只允许管理员/私聊/所有者调用（安全默认） |
 
 **模型要求**：当前会话模型需要支持 `tool_use`；若要 Agent 真正"看见"截图，还需要 `image` 模态
 （例如 `deepseek/deepseek-flash`、`deepseek-v4-flash-vision-exp`、`minimax/MiniMax-M3` 等）。
@@ -200,6 +201,8 @@ astrbot_plugin_mumu_vm/
 - 自主玩手机受模型能力影响，建议给 `autoplay_provider_id` 指定图+工具都强的模型；提示词已禁止支付/转账/密码/广告安装等高风险操作，但仍建议在水位可控的账号上使用，并设置每日预算。
 - 画面静止时 screenrecord 只有 1~2 帧，属于正常现象（已自动合并并提示）。
 - 模拟器分辨率/横竖屏变化时截图坐标与 `input tap` 同尺度，插件自动从截图中读取尺寸，无需额外配置。
+- **adb shell 权限较大**：`mumu_phone_shell` 默认只允许管理员/私聊/所有者调用（`shell_tool_require_admin=true`）；建议同时配置每日预算（`autoplay_daily_budget_minutes` / `autoplay_runs_per_day`）并使用测试账号，随时可手动收手。
+- **提示词缓存**：默认「精简模式」会替换/裁剪系统提示词与历史，能省 token 但会降低模型前缀缓存命中率；如果更在意缓存命中与稳定的提示词前缀，可打开 `vm_mode_cache_friendly=true`（追加注入、不裁剪，token 会更多）。
 
 ## 10. 开源声明 / 隐私与 AI 生成
 
@@ -213,6 +216,11 @@ astrbot_plugin_mumu_vm/
 
 ## 11. 版本
 
+- v1.3.1（2026-10-20）
+  - 采纳 AstrBot 插件审核的非阻断建议：
+    - 新增 **缓存友好模式** `vm_mode_cache_friendly`（默认关）：手机模式改为**追加**注入、不裁剪历史/附加内容、手机提示块保持稳定（不把剩余时间/待处理消息塞进 system prompt），以提升模型前缀缓存命中；代价是 token 增加。默认仍保持精简提速模式。
+    - `mumu_phone_shell` 默认**仅管理员/私聊/所有者**可用（新增 `shell_tool_require_admin`，默认 true）；README 补充测试账号/每日预算的安全建议。
+    - 合成事件（自主玩/记忆写入）标记为管理员身份，保证需要权限的工具在后台也能正常工作。
 - v1.3.0（2026-10-20）
   - **开源发布**：去除个人默认配置与示例内容（示例人格卡、个人称呼、个人 ffmpeg 路径等），默认值为通用占位，不影响已有配置。
   - 增加 AI 生成声明、隐私说明、`NOTICE.md`、`MIT LICENSE`、`.gitignore`。

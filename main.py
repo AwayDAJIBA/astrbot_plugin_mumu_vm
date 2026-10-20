@@ -40,7 +40,7 @@ DESC = (
     "UI 点击、中文输入、应用/系统控制、玩手机模式精简提速、被打扰时只回“正在玩手机”、"
     "空闲/定时自主玩手机与随时收手）。"
 )
-VERSION = "v1.3.0"
+VERSION = "v1.3.1"
 
 # 精简模式（普通聊天）下暴露的工具：让 Agent 知道有手机可用，又不占太多上下文
 COMPACT_TOOLS = {
@@ -570,6 +570,10 @@ class MumuVmPlugin(Star):
                     pass
         except Exception:
             pass
+        try:
+            event.role = "admin"
+        except Exception:
+            pass
 
     async def notify_owner(self, text: str) -> bool:
         umo = self.state.owner_umo
@@ -812,19 +816,24 @@ class MumuVmPlugin(Star):
                 if tool.name in allowed and new_set.get_tool(tool.name) is None:
                     new_set.add_tool(tool)
         req.func_tool = new_set if new_set.tools else None
-        if bool(self._cfg("slim_trim_contexts", True)):
+        # 缓存友好模式：不裁剪历史/附加内容、不改写系统提示词前缀，只追加稳定的手机提示块，
+        # 让模型的前缀缓存/缓存命中尽可能保留（代价是 token 更多）。
+        cache_mode = bool(self._cfg("vm_mode_cache_friendly", False))
+        if (not cache_mode) and bool(self._cfg("slim_trim_contexts", True)):
             keep = int(util.clamp(int(self._cfg("slim_context_keep_messages", 8)), 0, 40))
             if keep <= 0:
                 req.contexts = []
             elif req.contexts and len(req.contexts) > keep:
                 req.contexts = req.contexts[-keep:]
-        if bool(self._cfg("slim_extra_content_parts", True)):
+        if (not cache_mode) and bool(self._cfg("slim_extra_content_parts", True)):
             req.extra_user_content_parts = []
         if bool(self._cfg("slim_system_prompt", True)):
-            block = self._vm_system_block()
+            block = self._vm_system_block(cache_friendly=cache_mode)
             persona_source, persona_prompt = await self.resolve_phone_persona()
             iris_ctx = await self.get_iris_phone_context()
-            replace_mode = bool(self._cfg("vm_mode_replace_system_prompt", True))
+            replace_mode = (
+                bool(self._cfg("vm_mode_replace_system_prompt", True)) and not cache_mode
+            )
             before_len = len(req.system_prompt or "")
             if replace_mode:
                 # 手机模式用自己的"单独人格提示词 + 手机操作规则"整体替换系统提示词，
@@ -848,7 +857,8 @@ class MumuVmPlugin(Star):
             if max_chars > 0 and len(req.system_prompt) > max_chars:
                 req.system_prompt = req.system_prompt[:max_chars] + "\n…（系统提示已精简）"
             self._diag(
-                f"注入手机模式提示词 mode={'replace' if replace_mode else 'append'} "
+                f"注入手机模式提示词 prompt_mode={'cache' if cache_mode else 'slim'} "
+                f"mode={'replace' if replace_mode else 'append'} "
                 f"block={len(block)}字 iris={len(iris_ctx)}字 "
                 f"iris_tools={sorted(iris_names)} "
                 f"system_prompt {before_len}->{len(req.system_prompt)}字 "
@@ -1040,11 +1050,20 @@ class MumuVmPlugin(Star):
                 break
         return util.truncate("；".join(lines), limit)
 
-    def _vm_system_block(self) -> str:
-        pending = self.state.pending_notice_text()
+    def _vm_system_block(self, cache_friendly: bool = False) -> str:
+        pending = "" if cache_friendly else self.state.pending_notice_text()
+        if cache_friendly:
+            goal_line = (
+                f"目标：{self.state.goal or '随便玩玩'}。"
+                "（剩余时间/待处理消息用 mumu_phone_status / mumu_phone_messages 查，避免系统提示词频繁变化影响缓存）"
+            )
+        else:
+            goal_line = (
+                f"目标：{self.state.goal or '随便玩玩'}；剩余时间：{self.state.remaining_text()}。"
+            )
         lines = [
             "# 📱 手机模式（已激活，模拟器窗口隐藏，只有你能看到屏幕）",
-            f"目标：{self.state.goal or '随便玩玩'}；剩余时间：{self.state.remaining_text()}。",
+            goal_line,
             "观察：`mumu_phone_screen` 看单帧（静态细节/点按前确认）；`mumu_phone_frames` 连续采样一次返回多张带时间戳的图（看视频/动画/滑动/游戏过程）——参数由你定：duration 采样秒数、count 帧数、fps 每秒帧数、every 每几秒一帧、mode=frames 一帧一张图 / sheet 拼图版、max_images 最多几张图、region 裁剪、delay 等待。看视频时先小段粗看（如 duration=4, fps=2），需要细节再加 fps/count 或裁剪 region 分段看。",
             "操作：优先 `mumu_phone_tap`（可传 text/index 直接点元素）；坐标与截图同尺度；`mumu_phone_text` 支持中文；`mumu_phone_app` 打开 App；`mumu_phone_key` 返回键/主页。",
             "消息：只有 @你 或带触发词的消息会被转给你（对方只收到「正在玩手机」）；消息列在下方，想回用 `mumu_phone_say`，不想回就忽略。",
@@ -1286,7 +1305,7 @@ class MumuVmPlugin(Star):
             session = MessageSession(
                 "aiocqhttp", MessageType.FRIEND_MESSAGE, "mumu_vm"
             )
-        return CronMessageEvent(
+        event = CronMessageEvent(
             context=self.context,
             session=session,
             message=prompt,
@@ -1294,6 +1313,16 @@ class MumuVmPlugin(Star):
             sender_name="手机",
             message_type=session.message_type,
         )
+        self._ensure_event_admin(event)
+        return event
+
+    @staticmethod
+    def _ensure_event_admin(event) -> None:
+        """合成事件/记忆事件按 owner 管理员处理（供需要权限的工具使用）。"""
+        try:
+            event.role = "admin"
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ 工具辅助
     def _mode_guard(self) -> str | None:
@@ -1465,6 +1494,15 @@ class MumuVmPlugin(Star):
                 lines.append(
                     "手机模式额外记忆工具："
                     + (", ".join(sorted(iris_names)) if iris_names else "无（phone_iris_tools_enable=false 或未安装 iris）")
+                )
+                cache_mode = bool(self._cfg("vm_mode_cache_friendly", False))
+                lines.append(
+                    "提示词缓存友好模式："
+                    + (
+                        "开（追加注入、不裁剪历史/附加内容、手机提示块保持稳定）"
+                        if cache_mode
+                        else "关（精简替换，token 更省但会降低前缀缓存命中）"
+                    )
                 )
                 lines.append("开头预览：\n" + util.truncate(prompt, 400).replace("\n", " / "))
             except Exception as exc:
@@ -2015,6 +2053,19 @@ class MumuVmPlugin(Star):
             return guard
         if not bool(self._cfg("enable_shell_tool", True)):
             return "shell 工具已被配置禁用。"
+        # 安全：adb shell 权限较大，默认只允许管理员/私聊/所有者（可配置放开）
+        if bool(self._cfg("shell_tool_require_admin", True)):
+            try:
+                allowed = bool(event.is_admin() or event.is_private_chat())
+                if not allowed and self.state.owner_sender_id:
+                    allowed = str(event.get_sender_id()) == str(self.state.owner_sender_id)
+            except Exception:
+                allowed = False
+            if not allowed:
+                return (
+                    "mumu_phone_shell 默认仅管理员/私聊可用；"
+                    "如需放开请把 shell_tool_require_admin 设为 false。"
+                )
         if not command.strip():
             return "command 不能为空"
         try:
