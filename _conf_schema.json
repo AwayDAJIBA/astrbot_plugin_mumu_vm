@@ -44,6 +44,26 @@
     "description": "Agent 收手/超时结束时是否顺手关闭 MuMu 模拟器",
     "default": true
   },
+  "mumu_lifecycle_manage": {
+    "type": "bool",
+    "description": "只在使用手机时拉起 MuMu；会话结束/空闲时清理 MuMu 后台进程（MuMuNxService 等）。Windows 服务 MuMuRemoteService 需要管理员才能停止，插件会尽力尝试并记录状态",
+    "default": true
+  },
+  "remove_mumu_autostart": {
+    "type": "bool",
+    "description": "插件启动时移除 MuMu 的登录自启动项（HKCU Run 的 MuMuPlayerService 及指向 MuMu 的启动项；MuMu 更新后可能重新添加，会自动再删）",
+    "default": true
+  },
+  "stop_mumu_when_idle": {
+    "type": "bool",
+    "description": "空闲时检测到 MuMu 后台进程就清理；若检测到你手动打开着 MuMu 主界面（MuMuNxMain/MuMuPlayer）则跳过，避免误杀",
+    "default": true
+  },
+  "mumu_idle_cleanup_sec": {
+    "type": "int",
+    "description": "空闲清理 MuMu 后台的检查间隔（秒，默认 120）",
+    "default": 120
+  },
   "apply_performance_profile": {
     "type": "bool",
     "description": "启动时把模拟器调成 60fps/动态调帧/后台保活，让隐藏运行时更流畅",

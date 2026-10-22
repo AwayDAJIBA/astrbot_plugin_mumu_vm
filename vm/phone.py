@@ -38,6 +38,7 @@ class Phone:
         self._size_cache: dict[str, int] = {}
         self._ui_cache: tuple[float, UiSnapshot] | None = None
         self._ime_ready = False
+        self._last_cleanup: dict = {}
 
     # ------------------------------------------------------------------ 配置
     def _cfg(self, key: str, default: Any) -> Any:
@@ -166,10 +167,20 @@ class Phone:
             self.screen = None
             self._ui_cache = None
             self._size_cache = {}
+            ok = False
             try:
-                return await self.mumu.shutdown()
+                ok = await self.mumu.shutdown()
             except Exception:
-                return False
+                ok = False
+            # 关掉 VM 后顺手清理 MuMu 的后台服务/进程；只在"手机模式"生命周期里做，
+            # 避免用户手动开着 MuMu 时被误杀（idle_cleanup 也会检查 UI 进程）。
+            if bool(self._cfg("mumu_lifecycle_manage", True)):
+                try:
+                    self._last_cleanup = await self.mumu.cleanup(reason="phone.stop")
+                except Exception as exc:
+                    if self.logger:
+                        self.logger.warning(f"MuMu 后台清理失败: {exc!r}")
+            return ok
 
     async def restart(self) -> dict[str, Any]:
         await self.stop()

@@ -112,7 +112,8 @@
 | `vm_index` | 0 | MuMu 多开实例序号 |
 | `keep_window_hidden` | true | 启动后隐藏模拟器窗口 |
 | `prestart_vm_on_enter` | true | 进入模式时先同步开机，避免首次工具调用等开机超时 |
-| `shutdown_on_exit` | true | 收手时关闭模拟器 |
+| `shutdown_on_exit` | true | 收手时关闭模拟器（并默认清理 MuMu 后台进程） |
+| `mumu_lifecycle_manage` / `remove_mumu_autostart` / `stop_mumu_when_idle` / `mumu_idle_cleanup_sec` | true / true / true / 120 | 按需启停：结束后清理 MuMu 后台进程、启动时移除 MuMu 登录自启动、空闲定期清理（检测到你手动打开的 MuMu 界面会跳过） |
 | `single_frame_max_width` | 1280 | 单帧返回宽度（越大越清晰、越费 token） |
 | `grid_max_width` | 2000 | 多帧拼图整图宽度（旧版拼图遗留） |
 | `frames_max_duration_sec` / `frames_max_count` / `frames_max_images` | 20 / 24 / 8 | 连续采样单次时长、帧数、返回图片数上限 |
@@ -161,6 +162,7 @@
 - **自主玩**：`context.tool_loop_agent(...)` + 合成 `CronMessageEvent` 驱动多轮小回合（每轮最多 `autoplay_max_steps_per_round` 步，轮间停顿），每轮写日记；工具集含 `mumu_phone_exit`，Agent 随时可安全收手；到时间/预算自动收手。
 - **打扰队列**：`on_any_message` 高优先级拦截（仅 @/唤醒前缀 消息）→ 入队 + 直接 `event.send()` 提示 + `event.stop_event()`，不触发 LLM；普通群聊消息直接放过。
 - **总结入记忆**：收手时把"目标 + 时长 + 最近几轮小结"整理成总结（默认**不截断**，可用 `summary_max_chars` 限制），调用 iris 的 `save_memory` 工具写 L2（合成事件带真实 user/group 身份），默认不再发聊天消息；Agent 主动用 `mumu_phone_lesson` 记过经验时，会再单独写一条《操作教程总结》。
+- **MuMu 后台生命周期**：只在进入手机模式/自主玩时启动 VM；收手时 `MuMuManager control shutdown` 后结束 `MuMuNxService`、`MuMuNxMain` 等用户级后台进程，空闲时兜底清理。插件启动时删除 HKCU Run 的 `MuMuPlayerService` 自启动项；`MuMuRemoteService` 服务改为 Manual 需一次管理员权限（本机已处理，之后按需启动 VM 实测正常）。空闲清理若发现 `MuMuNxMain.exe` / `MuMuPlayer.exe`（手动打开的 MuMu 界面）会跳过，避免误杀。
 
 ## 7. 目录结构
 
@@ -203,6 +205,7 @@ astrbot_plugin_mumu_vm/
 - 模拟器分辨率/横竖屏变化时截图坐标与 `input tap` 同尺度，插件自动从截图中读取尺寸，无需额外配置。
 - **adb shell 权限较大**：`mumu_phone_shell` 默认只允许管理员/私聊/所有者调用（`shell_tool_require_admin=true`）；建议同时配置每日预算（`autoplay_daily_budget_minutes` / `autoplay_runs_per_day`）并使用测试账号，随时可手动收手。
 - **提示词缓存**：默认「精简模式」会替换/裁剪系统提示词与历史，能省 token 但会降低模型前缀缓存命中率；如果更在意缓存命中与稳定的提示词前缀，可打开 `vm_mode_cache_friendly=true`（追加注入、不裁剪，token 会更多）。
+- **MuMu 服务自启动**：`MuMuRemoteService` 是 LocalSystem 服务，改成"手动"并停止需要**一次管理员权限**（可在管理员 PowerShell 执行 `Set-Service -Name MuMuRemoteService -StartupType Manual`）；插件之后会在空闲时尝试停止该服务（普通权限下可能失败，会记录在 `diag.log`）。
 
 ## 10. 开源声明 / 隐私与 AI 生成
 
@@ -216,6 +219,10 @@ astrbot_plugin_mumu_vm/
 
 ## 11. 版本
 
+- v1.3.2（2026-10-22）
+  - **按需启停 MuMu**：只有进入手机模式/自主玩时才拉起模拟器；收手或空闲时关闭 VM 并结束 `MuMuNxService` 等 MuMu 后台进程，避免 MuMu 后台服务常驻占用虚拟化/IOMMU 资源。
+  - **移除 MuMu 登录自启动**：插件启动时删除 HKCU Run 的 `MuMuPlayerService`（及指向 MuMu 的启动项）；`MuMuRemoteService` 服务建议设为 Manual（需要一次管理员权限），本机已处理。
+  - 新增配置 `mumu_lifecycle_manage` / `remove_mumu_autostart` / `stop_mumu_when_idle` / `mumu_idle_cleanup_sec`；空闲清理检测到手动打开的 MuMu 界面会跳过；`mumu_phone_status` 增加 MuMu 后台进程/服务状态展示。
 - v1.3.1（2026-10-20）
   - 采纳 AstrBot 插件审核的非阻断建议：
     - 新增 **缓存友好模式** `vm_mode_cache_friendly`（默认关）：手机模式改为**追加**注入、不裁剪历史/附加内容、手机提示块保持稳定（不把剩余时间/待处理消息塞进 system prompt），以提升模型前缀缓存命中；代价是 token 增加。默认仍保持精简提速模式。

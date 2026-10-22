@@ -40,7 +40,7 @@ DESC = (
     "UI 点击、中文输入、应用/系统控制、玩手机模式精简提速、被打扰时只回“正在玩手机”、"
     "空闲/定时自主玩手机与随时收手）。"
 )
-VERSION = "v1.3.1"
+VERSION = "v1.3.2"
 
 # 精简模式（普通聊天）下暴露的工具：让 Agent 知道有手机可用，又不占太多上下文
 COMPACT_TOOLS = {
@@ -96,6 +96,7 @@ class MumuVmPlugin(Star):
         self._iris_ctx_cache: tuple[float, str] = (0.0, "")
         self._iris_ctx_lock = asyncio.Lock()
         self._last_skip_diag = 0.0
+        self._last_mumu_cleanup_ts = 0.0
 
     # ------------------------------------------------------------------ 生命周期
     def _is_current(self) -> bool:
@@ -144,6 +145,9 @@ class MumuVmPlugin(Star):
             self._diag(f"清理上次残留的操作经验 {len(self.state.session_lessons)} 条")
             self.state.session_lessons.clear()
             self.state.save()
+        asyncio.create_task(
+            self._startup_mumu_cleanup(), name="mumu-vm-startup-cleanup"
+        )
         self._bg_task = asyncio.create_task(self._background_loop(), name="mumu-vm-scheduler")
 
     async def terminate(self) -> None:
@@ -200,6 +204,48 @@ class MumuVmPlugin(Star):
         return [item.strip() for item in raw.replace("，", ",").split(",") if item.strip()]
 
     # ------------------------------------------------------------------ 后台调度
+    async def _startup_mumu_cleanup(self) -> None:
+        """启动时移除 MuMu 自启动项，并清理上次残留的 MuMu 后台进程。"""
+        try:
+            removed = await self.phone.mumu.remove_autostart()
+            if removed:
+                self._diag(f"已移除 MuMu 自启动项: {removed}")
+        except Exception as exc:
+            self._diag(f"移除 MuMu 自启动项失败: {exc!r}")
+        try:
+            await asyncio.sleep(3)
+            if self.state.active or self.autoplay.running:
+                return
+            summary = await self.phone.mumu.idle_cleanup()
+            if summary.get("killed") or summary.get("remaining"):
+                self._diag(
+                    f"启动清理 MuMu 后台: killed={summary.get('killed')} "
+                    f"remaining={summary.get('remaining')} service={summary.get('service_after')}"
+                )
+        except Exception as exc:
+            self._diag(f"启动清理 MuMu 后台失败: {exc!r}")
+
+    async def _mumu_idle_cleanup_if_needed(self) -> None:
+        """空闲（不在手机模式）时定期清理 MuMu 后台进程。"""
+        if not bool(self._cfg("stop_mumu_when_idle", True)):
+            return
+        interval = float(
+            util.clamp(int(self._cfg("mumu_idle_cleanup_sec", 120)), 30, 3600)
+        )
+        now = time.time()
+        if now - float(self._last_mumu_cleanup_ts) < interval:
+            return
+        self._last_mumu_cleanup_ts = now
+        try:
+            summary = await self.phone.mumu.idle_cleanup()
+            if summary.get("killed") or summary.get("remaining"):
+                self._diag(
+                    f"空闲清理 MuMu 后台: killed={summary.get('killed')} "
+                    f"remaining={summary.get('remaining')} service={summary.get('service_after')}"
+                )
+        except Exception as exc:
+            self._diag(f"空闲清理 MuMu 后台失败: {exc!r}")
+
     async def _background_loop(self) -> None:
         await asyncio.sleep(8)
         while True:
@@ -217,6 +263,8 @@ class MumuVmPlugin(Star):
     async def _tick(self) -> None:
         if not self._enabled or not self._is_current():
             return
+        if not self.state.active and not self.autoplay.running:
+            await self._mumu_idle_cleanup_if_needed()
         self.state.reset_daily_if_needed()
         now = time.time()
         # 1) 模式超时自动收手
@@ -1464,6 +1512,15 @@ class MumuVmPlugin(Star):
         else:
             lines.append("📱 手机模式：未激活")
         lines.append(await self.phone.status_text())
+        try:
+            procs = await self.phone.mumu.list_processes()
+            svc = await self.phone.mumu.service_state("MuMuRemoteService")
+            lines.append(
+                f"MuMu 后台：进程={'无' if not procs else ', '.join(procs)}；"
+                f"MuMuRemoteService={svc}"
+            )
+        except Exception:
+            pass
         try:
             persona_source, phone_persona = await self.resolve_phone_persona()
             replace_mode = bool(self._cfg("vm_mode_replace_system_prompt", True))
