@@ -5,9 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import io
 import json
-import os
 import re
 import time
 from pathlib import Path
@@ -34,10 +32,8 @@ class MuMuController:
         "MuMuPlayer.exe",
         "MuMuVMMHeadless.exe",
     )
-    # 真正以 Windows 服务方式注册的 MuMu 组件（LocalSystem，停止/改启动类型需要管理员）
+    # MuMu 的 Windows 服务名（只用于状态展示；插件不会修改/停止系统服务）
     MUMU_SERVICE_NAMES: tuple[str, ...] = ("MuMuRemoteService",)
-    # 登录自启动项名称（HKCU Run）
-    MUMU_AUTOSTART_VALUE = "MuMuPlayerService"
 
     def __init__(self, config: dict, logger=None):
         self.config = config
@@ -279,17 +275,6 @@ class MuMuController:
             pass
         return "UNKNOWN"
 
-    async def stop_services(self) -> dict[str, str]:
-        """尽力停止 MuMu 的 Windows 服务（非管理员会失败，失败只记日志）。"""
-        states: dict[str, str] = {}
-        for name in self.MUMU_SERVICE_NAMES:
-            try:
-                await util.run_process(["sc.exe", "stop", name], timeout=20)
-            except Exception:
-                pass
-            states[name] = await self.service_state(name)
-        return states
-
     async def kill_processes(self) -> tuple[list[str], list[str]]:
         """结束 MuMu 的用户级后台进程（MuMuNxService 等），返回 (成功, 失败)。"""
         killed: list[str] = []
@@ -308,109 +293,35 @@ class MuMuController:
         return killed, failed
 
     async def cleanup(self, reason: str = "") -> dict[str, Any]:
-        """会话结束/空闲时把 MuMu 的后台服务与进程都收掉。
+        """手机模式结束后关闭 MuMu 主程序/后台进程（可选项）。
 
-        - 用户级进程（MuMuNxService / MuMuNxMain 等）直接结束；
-        - MuMuRemoteService 需要管理员，普通权限下只能尝试停止并记录状态；
-        - 会做二次确认，避免关掉 VM 后进程又自动拉起来。
+        - 只结束本次使用后残留的 MuMu 用户级进程（MuMuNxMain / MuMuNxService 等）；
+        - **不修改任何系统设置、服务启动类型或自启动项**；
+        - 由 `close_mumu_app_on_exit` 配置控制，默认开；关掉就完全由用户手动收尾。
         """
-        if not bool(self._cfg("mumu_lifecycle_manage", True)):
-            return {"skipped": "mumu_lifecycle_manage=false"}
+        if not bool(self._cfg("close_mumu_app_on_exit", True)):
+            return {"skipped": "close_mumu_app_on_exit=false"}
         before = await self.list_processes()
-        service_before = {name: await self.service_state(name) for name in self.MUMU_SERVICE_NAMES}
+        if not before:
+            return {"skipped": "no_mumu_processes"}
         killed, failed = await self.kill_processes()
-        await self.stop_services()
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(0.5)
         # 二次清理：有些组件会在主进程退出后重新拉起
         killed2, failed2 = await self.kill_processes()
         remaining = await self.list_processes()
-        service_after = {name: await self.service_state(name) for name in self.MUMU_SERVICE_NAMES}
         summary = {
             "reason": reason,
             "before": before,
             "killed": killed + [n for n in killed2 if n not in killed],
             "failed": sorted(set(failed + failed2)),
             "remaining": remaining,
-            "service_before": service_before,
-            "service_after": service_after,
         }
         if self.logger:
             self.logger.info(
-                f"MuMu 后台清理（{reason or '—'}）: 结束 {summary['killed'] or '无'}；"
-                f"剩余 {remaining or '无'}；服务 {service_after}"
+                f"MuMu 主程序清理（{reason or '—'}）: 结束 {summary['killed'] or '无'}；"
+                f"剩余 {remaining or '无'}"
             )
         return summary
-
-    async def idle_cleanup(self) -> dict[str, Any]:
-        """空闲时清理残留 MuMu：用户手动打开了 MuMu 界面就跳过，避免误杀。"""
-        if not bool(self._cfg("stop_mumu_when_idle", True)):
-            return {"skipped": "stop_mumu_when_idle=false"}
-        processes = await self.list_processes()
-        if not processes:
-            return {"skipped": "no_mumu_processes"}
-        ui_open = any(
-            name.lower() in ("mumunxmain.exe", "mumuplayer.exe") for name in processes
-        )
-        if ui_open:
-            return {"skipped": "ui_open", "processes": processes}
-        return await self.cleanup(reason="idle")
-
-    async def remove_autostart(self) -> list[str]:
-        """移除 MuMu 的登录自启动项（HKCU Run / 用户启动文件夹）。
-
-        不需要管理员；HKLM 项（如果有）受权限限制不处理。MuMu 更新后可能会重新添加，
-        所以插件启动时都会检查一次。
-        """
-        if not bool(self._cfg("remove_mumu_autostart", True)):
-            return []
-        removed: list[str] = []
-        try:
-            import winreg
-
-            key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Run",
-                0,
-                winreg.KEY_READ | winreg.KEY_SET_VALUE,
-            )
-            try:
-                index = 0
-                while True:
-                    try:
-                        name, value, _ = winreg.EnumValue(key, index)
-                    except OSError:
-                        break
-                    value_text = str(value or "").lower()
-                    if name == self.MUMU_AUTOSTART_VALUE or (
-                        "mumu" in value_text or "nemu" in value_text
-                    ):
-                        try:
-                            winreg.DeleteValue(key, name)
-                            removed.append(f"HKCU Run::{name}")
-                        except Exception:
-                            index += 1
-                    else:
-                        index += 1
-            finally:
-                winreg.CloseKey(key)
-        except Exception:
-            pass
-        try:
-            startup = (
-                Path(os.environ.get("APPDATA", ""))
-                / "Microsoft/Windows/Start Menu/Programs/Startup"
-            )
-            if startup.is_dir():
-                for shortcut in startup.glob("*.lnk"):
-                    if "mumu" in shortcut.stem.lower() or "nemu" in shortcut.stem.lower():
-                        try:
-                            shortcut.unlink()
-                            removed.append(f"Startup::{shortcut.name}")
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-        return removed
 
     # ------------------------------------------------------------------ adb 连接
     async def adb_connect(self, serial: str) -> bool:

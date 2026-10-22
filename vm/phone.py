@@ -172,14 +172,14 @@ class Phone:
                 ok = await self.mumu.shutdown()
             except Exception:
                 ok = False
-            # 关掉 VM 后顺手清理 MuMu 的后台服务/进程；只在"手机模式"生命周期里做，
-            # 避免用户手动开着 MuMu 时被误杀（idle_cleanup 也会检查 UI 进程）。
-            if bool(self._cfg("mumu_lifecycle_manage", True)):
+            # 关掉 VM 后可选地关闭 MuMu 主程序/后台进程（close_mumu_app_on_exit，默认开）。
+            # 不做任何系统设置/自启动/服务启动类型的修改。
+            if bool(self._cfg("close_mumu_app_on_exit", True)):
                 try:
                     self._last_cleanup = await self.mumu.cleanup(reason="phone.stop")
                 except Exception as exc:
                     if self.logger:
-                        self.logger.warning(f"MuMu 后台清理失败: {exc!r}")
+                        self.logger.warning(f"MuMu 主程序清理失败: {exc!r}")
             return ok
 
     async def restart(self) -> dict[str, Any]:
