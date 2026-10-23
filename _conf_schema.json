@@ -161,12 +161,12 @@
   },
   "media_audio_backend": {
     "type": "string",
-    "description": "录音后端：soundcard（默认，抓 Windows 默认扬声器 loopback）/ ffmpeg（需 media_audio_device）/ off",
-    "default": "soundcard"
+    "description": "录音后端：capturekit（默认，WASAPI 进程 loopback，只抓 MuMu 进程声音，不抓 Windows 扬声器）/ ffmpeg（需一台专用 dshow 设备）/ off",
+    "default": "capturekit"
   },
   "media_audio_device": {
     "type": "string",
-    "description": "ffmpeg dshow 录音设备名（media_audio_backend=ffmpeg 时必填）",
+    "description": "ffmpeg 模式专用 dshow 音频设备名（例如把 MuMu 输出接到虚拟声卡后填 \"CABLE Output (VB-Audio Virtual Cable)\"）；capturekit 模式无需填写",
     "default": ""
   },
   "media_record_max_sec": {

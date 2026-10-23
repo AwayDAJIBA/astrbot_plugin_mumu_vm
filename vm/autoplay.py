@@ -304,7 +304,7 @@ class AutoplayEngine:
             system_prompt += (
                 "\n\n# 媒体辅助\n"
                 "录制时仍可继续操作手机：mumu_phone_record_start/stop 后台录屏，停止时可让视觉/全模态模型转述画面；"
-                "mumu_phone_hear_start/stop 后台录音，停止时可 STT 转写/让音频模型描述声音；"
+                "mumu_phone_hear_start/stop 后台录音（只录 MuMu 声音，不录 Windows 其它应用），停止时可 STT 转写/让音频模型描述声音；"
                 "用 mumu_phone_media_status 查看当前可用的媒体能力。"
             )
         max_steps = int(util.clamp(int(self._cfg("autoplay_max_steps_per_round", 28)), 4, 120))

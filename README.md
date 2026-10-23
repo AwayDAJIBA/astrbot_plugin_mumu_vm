@@ -20,7 +20,7 @@
 | 🫥 桌面只给 Agent 看 | `MuMuManager control hide_window` 隐藏模拟器窗口，之后全部通过 adb 截图/操作；启动时还会反复确认隐藏，避免窗口弹出来 |
 | 📸 单帧截图 | `mumu_phone_screen` 返回 1280px 宽的 PNG（可裁剪/延迟/叠坐标网格），适合看静态页面 |
 | 🎞 连续采样多帧 | `mumu_phone_frames` 按 Agent 指定的采样参数（`duration` 时长 / `count` 帧数 / `fps` 每秒帧数 / `every` 每几秒一帧）采样，**一次调用返回多张图**（`mode=frames` 一帧一张图，默认；`mode=sheet` 拼图版自动分页），每帧带 `#序号 时间戳` 标签；帧太多时按 `max_images` 分多张图继续给，不再硬塞进一张拼图 |
-| 🎙 媒体辅助（可选） | 主模型没有语音/视频模态时：`mumu_phone_record_start/stop` **后台录屏**→抽帧交给视觉/全模态模型转述画面；`mumu_phone_hear_start/stop` **后台录音**（默认抓 Windows 扬声器 loopback）→STT 转写/音频多模态模型描述声音；三者可同时开启；录制期间仍可正常操作手机、截图/多帧采样 |
+| 🎙 媒体辅助（可选） | 主模型没有语音/视频模态时：`mumu_phone_record_start/stop` **后台录屏**→抽帧交给视觉/全模态模型转述画面；`mumu_phone_hear_start/stop` **后台录音**（WASAPI 进程 loopback，**只录 MuMu 进程自己的声音**，不录 Windows 默认扬声器/其它应用）→STT 转写/音频多模态模型描述声音；三者可同时开启；录制期间仍可正常操作手机、截图/多帧采样 |
 | 🖱 精确操作 | 点击（支持按文字/UI 编号直接点）、长按、滑动/滚动、按键、中文/emoji 输入（自带 ADBKeyboard，自动安装） |
 | 🧭 UI 树 | `mumu_phone_ui` 返回可点击/可输入元素（中心坐标 + flags），比截图找按钮准 |
 | 📱 App/系统 | 前台应用、已安装列表、搜索、启动、打开链接、强停、安装/卸载 APK、电量/网络/IP/亮度/音量/旋转/解锁/通知栏/任意 shell |
@@ -39,7 +39,7 @@
    - 多开/自定义路径可在插件配置里填 `mumu_manager_path` / `adb_path`
 4. （可选但强烈建议）安装 ffmpeg 并在配置里填 `ffmpeg_path`，密集连续采样才走"真·录屏抽帧"（稀疏采样直接连续截图，不依赖 ffmpeg）。
    Pillow / mcp 随 AstrBot 提供，无需额外装。
-5. （可选）媒体辅助的**录音**需要 Windows loopback 采集：在 AstrBot 运行环境执行 `pip install soundcard`（numpy 一般已随环境提供）；不装也可以只用录屏/视觉转述，或用 `media_audio_backend=ffmpeg` + `media_audio_device` 走 ffmpeg dshow 设备。
+5. （可选）媒体辅助的**录音**需要进程级音频采集：在 AstrBot 运行环境执行 `pip install capturekit`（纯 Python + numpy）；它用 Windows WASAPI **进程 loopback 只抓 MuMu 进程的声音**，不会录 Windows 默认扬声器/其它应用。不装也可以只用录屏/视觉转述；也可用 `media_audio_backend=ffmpeg` + `media_audio_device` 走一台**专用** dshow 设备。
 
 > 首次进入手机模式会自动开机，冷启动可能需要 1~2 分钟（插件会先同步开机再调模型，避免工具调用超时）。
 
@@ -126,7 +126,7 @@
 | `media_assist_enable` | false | 媒体辅助总开关（关=不给 Agent 暴露录屏/录音工具） |
 | `stt_assist_enable` / `audio_llm_assist_enable` / `omni_assist_enable` | false / false / false | 三个可同时开启的转述能力：STT 转写 / 音频模型描述 / 视觉(全模态)转述 |
 | `stt_provider_id` / `audio_llm_provider_id` / `omni_provider_id` | 空 | 分别指定 Provider；留空自动选择（音频建议显式指定，见下方注意事项） |
-| `media_audio_backend` / `media_audio_device` | soundcard / 空 | 录音后端：soundcard（Windows loopback，推荐）或 ffmpeg dshow（需填设备名） |
+| `media_audio_backend` / `media_audio_device` | capturekit / 空 | 录音后端：capturekit（WASAPI 进程 loopback，只抓 MuMu 进程声音，推荐）或 ffmpeg（需一台专用 dshow 设备） |
 | `media_record_max_sec` / `media_video_frames` / `media_video_frame_width` | 120 / 6 / 768 | 单次录制最长秒数 / 录屏转述抽帧数 / 帧宽度 |
 | `media_video_bit_rate` / `media_keep_files` | 8000000 / false | 录屏码率 / 转述后是否保留媒体文件 |
 | `burst_max_frames` | 20 | 多帧上限 |
@@ -165,10 +165,10 @@
 
 ## 6. 实现要点
 
-- **隐藏窗口**：`MuMuManager.exe control -v <idx> hide_window`；启动后轮询确认（MuMu 窗口可能在初始化后又弹出来）。隐藏后 adb screencap / screenrecord 仍然正常，实测画面持续渲染。
+- **隐藏窗口**：`MuMuManager.exe control -v <idx> hide_window`；启动后轮询确认（MuMu 窗口可能在初始化后又弹出来）。隐藏后 adb screencap / screenrecord 仍然正常，实测画面持续渲染。**但实测隐藏窗口时 MuMu 引擎会停掉音频输出**（进程 loopback 抓到的 RMS=0）；所以录音开始前插件会把 MuMu 窗口移到屏幕外再 `show_window`（用户看不到，声音恢复），录完再 `hide_window` + 隐藏所有 MuMu 窗口。
 - **连续采样**：稀疏采样（间隔 ≥0.8s）直接连续 `screencap`；密集采样走 `screenrecord` → pull → ffmpeg 按采样间隔抽帧；每帧可裁剪/缩放/打时间戳标签，按 `mode` 输出"一帧一张图"或"多帧图版"，一次调用把 N 张图（`ImageContent`）一起返回，AstrBot 会把它们全部放进模型上下文。
 - **精简注入**：`@filter.on_llm_request` 在请求组装后：
-  - 手机模式：从 ToolManager **重建**只含 20 个手机工具（+白名单 + 可配置记忆插件工具）的 ToolSet（不依赖其他插件/persona 是否改写过工具集），裁剪 `contexts` 到最近 N 条，清空 `extra_user_content_parts`，追加手机操作提示；
+  - 手机模式：从 ToolManager **重建**只含 25 个手机工具（+白名单 + 可配置记忆插件工具）的 ToolSet（不依赖其他插件/persona 是否改写过工具集），裁剪 `contexts` 到最近 N 条，清空 `extra_user_content_parts`，追加手机操作提示；
   - 普通模式：移除 16 个重型手机工具，只补 4 个轻量工具。
 - **自主玩**：`context.tool_loop_agent(...)` + 合成 `CronMessageEvent` 驱动多轮小回合（每轮最多 `autoplay_max_steps_per_round` 步，轮间停顿），每轮写日记；工具集含 `mumu_phone_exit`，Agent 随时可安全收手；到时间/预算自动收手。
 - **打扰队列**：`on_any_message` 高优先级拦截（仅 @/唤醒前缀 消息）→ 入队 + 直接 `event.send()` 提示 + `event.stop_event()`，不触发 LLM；普通群聊消息直接放过。
@@ -219,10 +219,14 @@ astrbot_plugin_mumu_vm/
 - **adb shell 权限较大**：`mumu_phone_shell` 默认只允许管理员/私聊/所有者调用（`shell_tool_require_admin=true`）；建议同时配置每日预算（`autoplay_daily_budget_minutes` / `autoplay_runs_per_day`）并使用测试账号，随时可手动收手。
 - **媒体辅助注意**：
   - 默认全部关闭；开启后会把录音/录屏帧发送到对应的 STT / 音频 / 视觉 Provider，请确认这些服务的隐私策略。
-  - 录音后端 `soundcard` 需要额外安装（`pip install soundcard`，numpy 一般已随环境提供）；不装则只能用录屏/视觉转述或 ffmpeg dshow 后端。
+  - 录音后端 `capturekit` 需要额外安装（`pip install capturekit`）；它只抓 MuMu 进程声音，不会把 Windows 扬声器里其它应用的声音录进来。不装则只能用录屏/视觉转述或 ffmpeg 专用设备后端。
+  - **MuMu 隐藏窗口时会静音**（实测隐藏后进程 loopback 抓到 RMS=0）。录音开始前插件会临时把 MuMu 窗口移到屏幕外再 show（用户看不到），让引擎恢复音频渲染；录完再隐藏。此时 Windows 会实际播放 MuMu 的声音（可能被用户听到），但采集范围仍只有 MuMu 进程；录屏/截图时不会改变窗口可见性。
   - 音频模型自动选择可能挑到不支持音频输入的 Provider（表现为模型说"没收到音频"）；此时请在 `audio_llm_provider_id` 显式填一个支持音频的模型（例如 `xiaomi/mimo-v2.6-pro`）。
   - 录屏/录音期间会更新空闲计时，避免手机模式因"空闲"自动收手；但模式总时长仍然生效。
-  - **沙盒测试建议**：AstrBot 原版对音频/视频内容的处理存在已知问题（本机已有补丁），Media 功能建议先在**原版 AstrBot 的隔离沙盒**里用自制音视频测试，不要直接喂公网来源的不可信媒体，确认无问题后再放到生产环境。
+  - **原版沙盒测试结论（v1.4.1 实测）**：
+    - 原版 AstrBot 4.28 的 `text_chat(audio_urls=...)` 在 HTTP 层**能上传音频**（响应 usage 里能看到 audio_tokens），但模型把内容放在 `reasoning_content` 时核心的 `completion_text` 为空 → 原版拿不到文字；插件已加**直连 Provider HTTP 兜底**（不改核心）来解析这部分内容。
+    - 原版**没有原生视频输入**（`video_urls` 会被静默忽略）→ 插件固定用"录屏抽帧 → 图片"的路线，原版图片上传正常，因此这部分可用。
+    - 在**打了补丁的本机**上，音频/图片都能正常转述；沙盒只用于验证上述兼容路径。
 - **提示词缓存**：默认「精简模式」会替换/裁剪系统提示词与历史，能省 token 但会降低模型前缀缓存命中率；如果更在意缓存命中与稳定的提示词前缀，可打开 `vm_mode_cache_friendly=true`（追加注入、不裁剪，token 会更多）。
 - **MuMu 服务自启动**：`MuMuRemoteService` 是 LocalSystem 服务，插件**不会**修改它的启动类型或停止它；如果需要减少 MuMu 后台常驻，请自行用一次管理员 PowerShell 执行：
   `Set-Service -Name MuMuRemoteService -StartupType Manual`，再在需要时手动 `sc stop MuMuRemoteService`。MuMu 的登录自启动项也请在任务管理器「启动应用」里手动禁用（插件不会改注册表）。
@@ -247,6 +251,11 @@ astrbot_plugin_mumu_vm/
 
 ## 11. 版本
 
+- v1.4.1（2026-10-23）
+  - 录音从"抓 Windows 默认扬声器"改为 **WASAPI 进程 loopback，只抓 MuMu 进程声音**（capturekit，可选安装），不再把其它应用的声音录进去。
+  - 实测 **MuMu 隐藏窗口时会静音**；录音时自动把 MuMu 窗口移到屏幕外再 show（用户不可见）恢复音频渲染，录完恢复隐藏——只采集 MuMu 进程，宿主其它声音实测不会进入录音。
+  - 新增 **原版 AstrBot 沙盒测试结论**：原版音频 HTTP 能上传但 `completion_text` 可能为空（内容在 reasoning_content），原生视频无输入；插件新增**直连 Provider HTTP 兜底**（音频/图片，不改 AstrBot 核心），视频继续用抽帧→图片。
+  - 音频模型 Provider 配置建议显式指定（如 `xiaomi/mimo-v2.6-pro`），避免自动选到不支持音频输入的模型。
 - v1.4.0（2026-10-23）
   - **媒体辅助（可选，三个开关可同时开启）**：
     - 录屏：`mumu_phone_record_start/stop` 后台 `screenrecord`，录制期间仍可点击/滑动/截图/多帧采样；停止后抽帧交给视觉/全模态模型转述画面（`omni_assist_enable`）。

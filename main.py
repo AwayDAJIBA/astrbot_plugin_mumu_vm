@@ -41,7 +41,7 @@ DESC = (
     "UI 点击、中文输入、应用/系统控制、玩手机模式精简提速、被打扰时只回“正在玩手机”、"
     "空闲/定时自主玩手机与随时收手）。"
 )
-VERSION = "v1.4.0"
+VERSION = "v1.4.1"
 
 # 精简模式（普通聊天）下暴露的工具：让 Agent 知道有手机可用，又不占太多上下文
 COMPACT_TOOLS = {
@@ -1112,7 +1112,7 @@ class MumuVmPlugin(Star):
             lines.append(
                 "媒体辅助（录制期间仍可正常操作/截图）："
                 "`mumu_phone_record_start`/`mumu_phone_record_stop` 后台录屏，停止时可让视觉/全模态模型转述画面；"
-                "`mumu_phone_hear_start`/`mumu_phone_hear_stop` 后台录音，停止时可 STT 转写/让音频模型描述声音；"
+                "`mumu_phone_hear_start`/`mumu_phone_hear_stop` 后台录音（只录 MuMu 进程自己的声音，不录 Windows 其它应用），停止时可 STT 转写/让音频模型描述声音；"
                 f"当前开关：STT={'开' if flags.get('stt') else '关'}、"
                 f"音频模型={'开' if flags.get('audio_llm') else '关'}、"
                 f"视觉转述={'开' if flags.get('omni') else '关'}；"

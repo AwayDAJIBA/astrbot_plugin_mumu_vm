@@ -1,5 +1,7 @@
 # Pillow / mcp 随 AstrBot 本体提供，无需额外安装。
-# 可选：音频辅助（录音）需要 soundcard + numpy（numpy 通常已随环境提供）：
-#   pip install soundcard
-# 不安装 soundcard 时录音工具会提示不可用；录屏/截图功能不受影响。
-# 也可以用 ffmpeg 的 dshow 设备录音（media_audio_backend=ffmpeg + media_audio_device）。
+# 可选：音频辅助（只录 MuMu 进程声音）需要 capturekit + numpy：
+#   pip install capturekit
+# capturekit 是纯 Python + ctypes 包，通过 Windows WASAPI 进程 loopback 只抓
+# MuMu 进程自己渲染的音频，不会录 Windows 默认扬声器/其它应用。
+# 不安装 capturekit 时录音工具会提示不可用；录屏/视觉转述不受影响。
+# 也可以用 ffmpeg 的专用 dshow 设备录音（media_audio_backend=ffmpeg + media_audio_device）。
