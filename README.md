@@ -20,10 +20,11 @@
 | 🫥 桌面只给 Agent 看 | `MuMuManager control hide_window` 隐藏模拟器窗口，之后全部通过 adb 截图/操作；启动时还会反复确认隐藏，避免窗口弹出来 |
 | 📸 单帧截图 | `mumu_phone_screen` 返回 1280px 宽的 PNG（可裁剪/延迟/叠坐标网格），适合看静态页面 |
 | 🎞 连续采样多帧 | `mumu_phone_frames` 按 Agent 指定的采样参数（`duration` 时长 / `count` 帧数 / `fps` 每秒帧数 / `every` 每几秒一帧）采样，**一次调用返回多张图**（`mode=frames` 一帧一张图，默认；`mode=sheet` 拼图版自动分页），每帧带 `#序号 时间戳` 标签；帧太多时按 `max_images` 分多张图继续给，不再硬塞进一张拼图 |
+| 🎙 媒体辅助（可选） | 主模型没有语音/视频模态时：`mumu_phone_record_start/stop` **后台录屏**→抽帧交给视觉/全模态模型转述画面；`mumu_phone_hear_start/stop` **后台录音**（默认抓 Windows 扬声器 loopback）→STT 转写/音频多模态模型描述声音；三者可同时开启；录制期间仍可正常操作手机、截图/多帧采样 |
 | 🖱 精确操作 | 点击（支持按文字/UI 编号直接点）、长按、滑动/滚动、按键、中文/emoji 输入（自带 ADBKeyboard，自动安装） |
 | 🧭 UI 树 | `mumu_phone_ui` 返回可点击/可输入元素（中心坐标 + flags），比截图找按钮准 |
 | 📱 App/系统 | 前台应用、已安装列表、搜索、启动、打开链接、强停、安装/卸载 APK、电量/网络/IP/亮度/音量/旋转/解锁/通知栏/任意 shell |
-| ✂️ 玩手机模式精简 | 普通聊天只注入 4 个轻量手机工具；进入手机模式后**只保留 20 个手机工具**（+ 可配置的 `send_message_to_user` 和记忆插件工具），并裁剪对话历史、附加内容与系统提示，保证速度 |
+| ✂️ 玩手机模式精简 | 普通聊天只注入 4 个轻量手机工具；进入手机模式后**只保留 25 个手机工具**（+ 可配置的 `send_message_to_user` 和记忆插件工具），并裁剪对话历史、附加内容与系统提示，保证速度 |
 | 📨 打扰拦截 | 玩手机时来消息：不回复正文，只自动回"正在玩手机"，并把消息入队 + 在后续工具结果/系统提示中通知 Agent，由 Agent 自己决定是否用 `mumu_phone_say` 回复 |
 | 🤖 自主玩手机 | 主 Agent 回合结束后可自动转入后台自主模式继续玩；也支持**空闲 N 分钟自动开始**、**指定时间定时开始**、每日次数/时长预算；到点/空闲/Agent 主动都能收手并关掉模拟器 |
 | 🧠 连续性 | `mumu_phone_diary` 记录每轮"玩到哪了"，跨轮次/跨回合保持上下文 |
@@ -38,6 +39,7 @@
    - 多开/自定义路径可在插件配置里填 `mumu_manager_path` / `adb_path`
 4. （可选但强烈建议）安装 ffmpeg 并在配置里填 `ffmpeg_path`，密集连续采样才走"真·录屏抽帧"（稀疏采样直接连续截图，不依赖 ffmpeg）。
    Pillow / mcp 随 AstrBot 提供，无需额外装。
+5. （可选）媒体辅助的**录音**需要 Windows loopback 采集：在 AstrBot 运行环境执行 `pip install soundcard`（numpy 一般已随环境提供）；不装也可以只用录屏/视觉转述，或用 `media_audio_backend=ffmpeg` + `media_audio_device` 走 ffmpeg dshow 设备。
 
 > 首次进入手机模式会自动开机，冷启动可能需要 1~2 分钟（插件会先同步开机再调模型，避免工具调用超时）。
 
@@ -79,7 +81,7 @@
 
 ## 4. 工具列表
 
-普通聊天只注入前 4 个（轻量，含最近操作回顾）；进入手机模式后注入全部 20 个（外加可配置的记忆插件工具）：
+普通聊天只注入前 4 个（轻量，含最近操作回顾）；进入手机模式后注入全部 25 个（外加可配置的记忆插件工具）：
 
 | 工具 | 作用 |
 | --- | --- |
@@ -102,6 +104,9 @@
 | `mumu_phone_say` | 给用户发消息 / 回复指定待处理消息 |
 | `mumu_phone_diary` | 玩手机日记（get/add） |
 | `mumu_phone_lesson` | 可选记录一条操作经验（遇到什么情况→该怎么做），收手时整理成《操作教程总结》单独写长期记忆 |
+| `mumu_phone_media_status` | 查看媒体辅助开关、录音后端、录制状态 |
+| `mumu_phone_record_start` / `mumu_phone_record_stop` | 后台录屏（期间可继续操作/截图）；stop 可抽帧交给视觉/全模态模型转述，`return_frames=true` 时也把关键帧作为图片返回 |
+| `mumu_phone_hear_start` / `mumu_phone_hear_stop` | 后台录音（默认抓扬声器 loopback，期间可继续操作）；stop 可 STT 转写、音频多模态模型描述 |
 | `mumu_phone_exit` | 收手退出（可关模拟器） |
 
 ## 5. 关键配置（全部在 WebUI 插件配置里）
@@ -118,6 +123,12 @@
 | `grid_max_width` | 2000 | 多帧拼图整图宽度（旧版拼图遗留） |
 | `frames_max_duration_sec` / `frames_max_count` / `frames_max_images` | 20 / 24 / 8 | 连续采样单次时长、帧数、返回图片数上限 |
 | `frames_image_width` / `frames_sheet_tile_width` | 768 / 480 | frames 单帧宽度 / sheet 每格宽度 |
+| `media_assist_enable` | false | 媒体辅助总开关（关=不给 Agent 暴露录屏/录音工具） |
+| `stt_assist_enable` / `audio_llm_assist_enable` / `omni_assist_enable` | false / false / false | 三个可同时开启的转述能力：STT 转写 / 音频模型描述 / 视觉(全模态)转述 |
+| `stt_provider_id` / `audio_llm_provider_id` / `omni_provider_id` | 空 | 分别指定 Provider；留空自动选择（音频建议显式指定，见下方注意事项） |
+| `media_audio_backend` / `media_audio_device` | soundcard / 空 | 录音后端：soundcard（Windows loopback，推荐）或 ffmpeg dshow（需填设备名） |
+| `media_record_max_sec` / `media_video_frames` / `media_video_frame_width` | 120 / 6 / 768 | 单次录制最长秒数 / 录屏转述抽帧数 / 帧宽度 |
+| `media_video_bit_rate` / `media_keep_files` | 8000000 / false | 录屏码率 / 转述后是否保留媒体文件 |
 | `burst_max_frames` | 20 | 多帧上限 |
 | `mode_default_minutes` | 30 | 自然语言进入后的时长 |
 | `mode_idle_timeout_sec` | 180 | 手机模式空闲多久自动收手 |
@@ -169,7 +180,7 @@
 
 ```
 astrbot_plugin_mumu_vm/
-├─ main.py              # 插件类：filters / 20 个 LLM 工具 / 模式与打扰逻辑 / 调度
+├─ main.py              # 插件类：filters / 25 个 LLM 工具 / 模式与打扰逻辑 / 调度
 ├─ metadata.yaml
 ├─ _conf_schema.json
 ├─ requirements.txt     # 无额外依赖（Pillow/mcp 随 AstrBot）
@@ -183,6 +194,7 @@ astrbot_plugin_mumu_vm/
    ├─ phone.py          # 把 mumu+adb+screen+ui 组合成"一部手机"
    ├─ state.py          # 持久状态：模式/待处理消息/日记/操作记录/经验/预算/定时
    ├─ autoplay.py       # 自主玩手机的 agent 循环
+   ├─ media.py          # 媒体辅助：后台录屏/录音 + STT/音频/视觉转述
    └─ util.py           # 进程/文件/图片/路径工具
 ```
 
@@ -205,6 +217,12 @@ astrbot_plugin_mumu_vm/
 - 画面静止时 screenrecord 只有 1~2 帧，属于正常现象（已自动合并并提示）。
 - 模拟器分辨率/横竖屏变化时截图坐标与 `input tap` 同尺度，插件自动从截图中读取尺寸，无需额外配置。
 - **adb shell 权限较大**：`mumu_phone_shell` 默认只允许管理员/私聊/所有者调用（`shell_tool_require_admin=true`）；建议同时配置每日预算（`autoplay_daily_budget_minutes` / `autoplay_runs_per_day`）并使用测试账号，随时可手动收手。
+- **媒体辅助注意**：
+  - 默认全部关闭；开启后会把录音/录屏帧发送到对应的 STT / 音频 / 视觉 Provider，请确认这些服务的隐私策略。
+  - 录音后端 `soundcard` 需要额外安装（`pip install soundcard`，numpy 一般已随环境提供）；不装则只能用录屏/视觉转述或 ffmpeg dshow 后端。
+  - 音频模型自动选择可能挑到不支持音频输入的 Provider（表现为模型说"没收到音频"）；此时请在 `audio_llm_provider_id` 显式填一个支持音频的模型（例如 `xiaomi/mimo-v2.6-pro`）。
+  - 录屏/录音期间会更新空闲计时，避免手机模式因"空闲"自动收手；但模式总时长仍然生效。
+  - **沙盒测试建议**：AstrBot 原版对音频/视频内容的处理存在已知问题（本机已有补丁），Media 功能建议先在**原版 AstrBot 的隔离沙盒**里用自制音视频测试，不要直接喂公网来源的不可信媒体，确认无问题后再放到生产环境。
 - **提示词缓存**：默认「精简模式」会替换/裁剪系统提示词与历史，能省 token 但会降低模型前缀缓存命中率；如果更在意缓存命中与稳定的提示词前缀，可打开 `vm_mode_cache_friendly=true`（追加注入、不裁剪，token 会更多）。
 - **MuMu 服务自启动**：`MuMuRemoteService` 是 LocalSystem 服务，插件**不会**修改它的启动类型或停止它；如果需要减少 MuMu 后台常驻，请自行用一次管理员 PowerShell 执行：
   `Set-Service -Name MuMuRemoteService -StartupType Manual`，再在需要时手动 `sc stop MuMuRemoteService`。MuMu 的登录自启动项也请在任务管理器「启动应用」里手动禁用（插件不会改注册表）。
@@ -229,6 +247,14 @@ astrbot_plugin_mumu_vm/
 
 ## 11. 版本
 
+- v1.4.0（2026-10-23）
+  - **媒体辅助（可选，三个开关可同时开启）**：
+    - 录屏：`mumu_phone_record_start/stop` 后台 `screenrecord`，录制期间仍可点击/滑动/截图/多帧采样；停止后抽帧交给视觉/全模态模型转述画面（`omni_assist_enable`）。
+    - 录音：`mumu_phone_hear_start/stop` 后台抓 Windows 默认扬声器 loopback（soundcard）或 ffmpeg dshow；停止后可 STT 转写（`stt_assist_enable`）和/或音频多模态模型描述（`audio_llm_assist_enable`）。
+    - 录制期间自动更新空闲计时，不会因"空闲自动收手"中断；录屏与截图并发时多帧自动降级为连续截图，避免抢 screenrecord。
+    - 新增 `mumu_phone_media_status` 工具；媒体文件默认用完即删。
+  - 新增 14 项配置（`media_assist_enable` / 三个能力开关 / Provider 指定 / 录音后端 / 时长/帧数/码率/保留文件）。
+  - 推荐的音频 Provider 示例：`xiaomi/mimo-v2.6-pro`；若自动选择后模型说收不到音频，请显式指定。
 - v1.3.3（2026-10-22）
   - **符合 AstrBot 插件审核的调整**：移除插件自动修改系统配置/自启动项、以及后台定时清理 MuMu 进程的行为——插件不再碰注册表、不修改 Windows 服务启动类型、不在空闲时轮询系统进程。
   - 保留可选项 `close_mumu_app_on_exit`（默认开）：手机使用结束后关闭本次使用后残留的 MuMu 主程序/后台进程；关掉则完全手动收尾。

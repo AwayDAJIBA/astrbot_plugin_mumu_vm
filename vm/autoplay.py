@@ -300,6 +300,13 @@ class AutoplayEngine:
                 "遇到踩坑或好用的操作技巧时，可调用 mumu_phone_lesson(situation, action) 记一条；"
                 "收手时会整理成《操作教程总结》单独写入长期记忆（可选）。"
             )
+        if "mumu_phone_record_start" in {tool.name for tool in tools.tools}:
+            system_prompt += (
+                "\n\n# 媒体辅助\n"
+                "录制时仍可继续操作手机：mumu_phone_record_start/stop 后台录屏，停止时可让视觉/全模态模型转述画面；"
+                "mumu_phone_hear_start/stop 后台录音，停止时可 STT 转写/让音频模型描述声音；"
+                "用 mumu_phone_media_status 查看当前可用的媒体能力。"
+            )
         max_steps = int(util.clamp(int(self._cfg("autoplay_max_steps_per_round", 28)), 4, 120))
         resp = await self.context.tool_loop_agent(
             event=event,

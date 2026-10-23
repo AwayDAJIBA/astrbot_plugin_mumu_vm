@@ -323,6 +323,7 @@ class Phone:
         annotate: bool = True,
         region: str = "",
         delay: float = 0.0,
+        force_screencap: bool = False,
     ) -> SampleResult:
         """按 Agent 给的采样参数连续取帧，返回多张图。"""
         await self.ensure_ready()
@@ -341,6 +342,7 @@ class Phone:
             annotate=annotate,
             region=region,
             delay=delay,
+            force_screencap=force_screencap,
         )
         self._ui_cache = None
         return result

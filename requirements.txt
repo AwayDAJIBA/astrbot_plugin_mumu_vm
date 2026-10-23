@@ -1,2 +1,5 @@
 # Pillow / mcp 随 AstrBot 本体提供，无需额外安装。
-# 如果不放心中文截图拼图，确认宿主环境里有 Pillow 即可。
+# 可选：音频辅助（录音）需要 soundcard + numpy（numpy 通常已随环境提供）：
+#   pip install soundcard
+# 不安装 soundcard 时录音工具会提示不可用；录屏/截图功能不受影响。
+# 也可以用 ffmpeg 的 dshow 设备录音（media_audio_backend=ffmpeg + media_audio_device）。

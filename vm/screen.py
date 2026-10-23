@@ -383,11 +383,13 @@ class ScreenCapture:
         annotate: bool = True,
         region: str = "",
         delay: float = 0.0,
+        force_screencap: bool = False,
     ) -> SampleResult:
         """按指定采样参数连续取帧，返回多张图片。
 
         采样方式（优先级从高到低）：count（总帧数）> fps（帧/秒）> every（秒/帧）。
         mode=frames：一帧一张图；mode=sheet：多帧拼成图版（自动按 per_image 分页成多张）。
+        force_screencap=True 时即使间隔很密也用连续截图（避免和后台录屏抢 screenrecord）。
         """
         if Image is None:
             raise RuntimeError("缺少 Pillow，无法处理截图")
@@ -425,7 +427,7 @@ class ScreenCapture:
         frames: list[tuple["Image.Image", float]] = []
         method = "screencap-sparse"
         try:
-            if interval >= 0.8:
+            if force_screencap or interval >= 0.8:
                 frames, method = await self._sample_screencaps(count_i, interval)
             else:
                 frames, method = await self._sample_screenrecord(duration, interval, count_i)

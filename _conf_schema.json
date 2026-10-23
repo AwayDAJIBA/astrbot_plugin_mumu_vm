@@ -124,6 +124,76 @@
     "description": "sheet 拼图模式每格宽度（拼图版省上下文但细节少）",
     "default": 480
   },
+  "media_assist_enable": {
+    "type": "bool",
+    "description": "启用媒体辅助工具（录屏/录音 + 转述；默认关，开启后才会给 Agent 暴露相关工具）",
+    "default": false
+  },
+  "stt_assist_enable": {
+    "type": "bool",
+    "description": "录音后是否用 AstrBot STT Provider 转写文字（需 stt_assist_enable）",
+    "default": false
+  },
+  "audio_llm_assist_enable": {
+    "type": "bool",
+    "description": "录音后是否交给支持音频的对话模型描述（需 audio_llm_provider_id 或自动选择支持 audio 的 Provider）",
+    "default": false
+  },
+  "omni_assist_enable": {
+    "type": "bool",
+    "description": "录屏后是否抽帧交给视觉/全模态模型转述画面（需 omni_provider_id 或支持 image 的 Provider）",
+    "default": false
+  },
+  "stt_provider_id": {
+    "type": "string",
+    "description": "STT Provider ID；留空=自动使用 AstrBot 当前启用的语音转文字 Provider",
+    "default": ""
+  },
+  "audio_llm_provider_id": {
+    "type": "string",
+    "description": "音频多模态模型 Provider ID；留空=自动选择支持 audio 模态的 Provider",
+    "default": ""
+  },
+  "omni_provider_id": {
+    "type": "string",
+    "description": "视觉/全模态转述 Provider ID；留空=自动选择支持 image 模态的 Provider（如当前会话模型）",
+    "default": ""
+  },
+  "media_audio_backend": {
+    "type": "string",
+    "description": "录音后端：soundcard（默认，抓 Windows 默认扬声器 loopback）/ ffmpeg（需 media_audio_device）/ off",
+    "default": "soundcard"
+  },
+  "media_audio_device": {
+    "type": "string",
+    "description": "ffmpeg dshow 录音设备名（media_audio_backend=ffmpeg 时必填）",
+    "default": ""
+  },
+  "media_record_max_sec": {
+    "type": "int",
+    "description": "单次录音/录屏最长时长（秒，5~180）",
+    "default": 120
+  },
+  "media_video_frames": {
+    "type": "int",
+    "description": "录屏转述时抽取的关键帧数量（1~12）",
+    "default": 6
+  },
+  "media_video_frame_width": {
+    "type": "int",
+    "description": "录屏转述关键帧宽度（px）",
+    "default": 768
+  },
+  "media_video_bit_rate": {
+    "type": "int",
+    "description": "录屏码率（bit/s，默认 8Mbps）",
+    "default": 8000000
+  },
+  "media_keep_files": {
+    "type": "bool",
+    "description": "转述后是否保留录屏/录音文件（默认 false 用完删除）",
+    "default": false
+  },
   "grid_label_frames": {
     "type": "bool",
     "description": "多帧拼图是否给每格标注帧序号/时间",

@@ -29,6 +29,7 @@ from astrbot.core.platform.message_session import MessageSession
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 
 from .vm.autoplay import AutoplayEngine
+from .vm.media import PhoneMedia
 from .vm.phone import Phone
 from .vm.state import SessionState
 from .vm import util
@@ -40,7 +41,7 @@ DESC = (
     "UI 点击、中文输入、应用/系统控制、玩手机模式精简提速、被打扰时只回“正在玩手机”、"
     "空闲/定时自主玩手机与随时收手）。"
 )
-VERSION = "v1.3.3"
+VERSION = "v1.4.0"
 
 # 精简模式（普通聊天）下暴露的工具：让 Agent 知道有手机可用，又不占太多上下文
 COMPACT_TOOLS = {
@@ -67,8 +68,21 @@ FULL_ONLY_TOOLS = {
     "mumu_phone_diary",
     "mumu_phone_lesson",
     "mumu_phone_exit",
+    "mumu_phone_media_status",
+    "mumu_phone_record_start",
+    "mumu_phone_record_stop",
+    "mumu_phone_hear_start",
+    "mumu_phone_hear_stop",
 }
 FULL_TOOL_NAMES = COMPACT_TOOLS | FULL_ONLY_TOOLS
+# 媒体辅助工具（受 media_assist_enable 总开关控制）
+MEDIA_TOOL_NAMES = {
+    "mumu_phone_media_status",
+    "mumu_phone_record_start",
+    "mumu_phone_record_stop",
+    "mumu_phone_hear_start",
+    "mumu_phone_hear_stop",
+}
 # 自主玩手机时给的手机工具（含 mumu_phone_exit：Agent 想收手时必须能退出来）
 AUTOPLAY_TOOL_NAMES = FULL_TOOL_NAMES - {"mumu_phone_play", "mumu_phone_autoplay"}
 
@@ -88,6 +102,7 @@ class MumuVmPlugin(Star):
             assets_dir=Path(__file__).parent / "assets",
         )
         self.autoplay = AutoplayEngine(self)
+        self.media = PhoneMedia(self)
         self._bg_task: asyncio.Task | None = None
         self._startup_ts = time.time()
         self._entry_lock = asyncio.Lock()
@@ -155,6 +170,10 @@ class MumuVmPlugin(Star):
                 except (asyncio.CancelledError, Exception):
                     pass
             await self.autoplay.stop(reason="插件卸载", notify=False)
+            try:
+                await self.media.abort_all()
+            except Exception:
+                pass
             if self.state.active and bool(self._cfg("shutdown_on_exit", True)):
                 try:
                     await self.phone.stop()
@@ -406,6 +425,11 @@ class MumuVmPlugin(Star):
                 self._diag("操作教程总结：本次 Agent 没有主动记录经验，跳过")
         except Exception as exc:
             self._diag(f"写入操作教程总结失败: {exc!r}")
+        # 收手前停止可能存在的录屏/录音，并清理临时媒体文件
+        try:
+            await self.media.abort_all()
+        except Exception as exc:
+            self._diag(f"收尾清理媒体录制失败: {exc!r}")
         pending = self.state.unhandled_pending()
         stop_vm = bool(self._cfg("shutdown_on_exit", True))
         if stop_vm_override is not None:
@@ -798,6 +822,8 @@ class MumuVmPlugin(Star):
         allowed = set(FULL_TOOL_NAMES) | iris_names
         if not bool(self._cfg("lesson_note_enable", True)):
             allowed.discard("mumu_phone_lesson")
+        if not bool(self._cfg("media_assist_enable", True)):
+            allowed -= MEDIA_TOOL_NAMES
         for name in self._keywords("vm_mode_extra_tools", "send_message_to_user"):
             allowed.add(name)
         # 从工具管理器重建工具集（手机工具一定在管理器里注册过）
@@ -1081,6 +1107,17 @@ class MumuVmPlugin(Star):
                 "经验：遇到踩坑或好用的操作技巧时，可用 `mumu_phone_lesson(situation, action)` 记一条；"
                 "收手时会整理成《操作教程总结》单独写入长期记忆（可选，不记也行）。"
             )
+        if self._media_tools_enabled():
+            flags = self.media.assist_flags()
+            lines.append(
+                "媒体辅助（录制期间仍可正常操作/截图）："
+                "`mumu_phone_record_start`/`mumu_phone_record_stop` 后台录屏，停止时可让视觉/全模态模型转述画面；"
+                "`mumu_phone_hear_start`/`mumu_phone_hear_stop` 后台录音，停止时可 STT 转写/让音频模型描述声音；"
+                f"当前开关：STT={'开' if flags.get('stt') else '关'}、"
+                f"音频模型={'开' if flags.get('audio_llm') else '关'}、"
+                f"视觉转述={'开' if flags.get('omni') else '关'}；"
+                "详细状态用 `mumu_phone_media_status`。"
+            )
         lines.extend(
             [
                 "",
@@ -1290,6 +1327,8 @@ class MumuVmPlugin(Star):
         allowed = set(AUTOPLAY_TOOL_NAMES) | iris_names
         if not bool(self._cfg("lesson_note_enable", True)):
             allowed.discard("mumu_phone_lesson")
+        if not bool(self._cfg("media_assist_enable", True)):
+            allowed -= MEDIA_TOOL_NAMES
         for tool in full.tools:
             if tool.name in allowed:
                 tool_set.add_tool(tool)
@@ -1473,6 +1512,11 @@ class MumuVmPlugin(Star):
             )
         except Exception:
             pass
+        if self._media_tools_enabled():
+            try:
+                lines.append(self.media.status_text())
+            except Exception:
+                pass
         try:
             persona_source, phone_persona = await self.resolve_phone_persona()
             replace_mode = bool(self._cfg("vm_mode_replace_system_prompt", True))
@@ -1548,7 +1592,7 @@ class MumuVmPlugin(Star):
             )
         # was_active=False 说明当前这次请求组装时还不是手机模式，工具集里没有完整手机工具，
         # Agent 本回合没法自己操作手机，必须交给后台自主模式去玩，否则会卡住。
-        force_auto = not self.state.active
+        force_auto = not self.state.active and bool(self._cfg("autoplay_enable", True))
         minutes = float(minutes or self._cfg("mode_default_minutes", 30))
         goal = goal or "随便玩玩手机"
         await self.begin_play_mode(
@@ -1747,6 +1791,12 @@ class MumuVmPlugin(Star):
             f"count={count:g} mode={mode} max_images={max_images:g}"
         )
         try:
+            force_screencap = bool(
+                self.media.video_active() or self.media.audio_active()
+            )
+        except Exception:
+            force_screencap = False
+        try:
             result = await self.phone.sample(
                 duration=float(duration or 3),
                 fps=float(fps or 0),
@@ -1761,6 +1811,7 @@ class MumuVmPlugin(Star):
                 annotate=bool(annotate),
                 region=str(region or ""),
                 delay=float(delay or 0),
+                force_screencap=force_screencap,
             )
         except Exception as exc:
             self._diag(f"mumu_phone_frames 失败: {exc!r}")
@@ -1778,6 +1829,8 @@ class MumuVmPlugin(Star):
             f"前台应用：{focus or '未知'}；时间轴："
             + ", ".join(self._fmt_sample_times(result.sample_times)),
         ]
+        if force_screencap:
+            lines.append("（录屏/录音进行中：多帧改用连续截图采集，避免和后台录屏抢 screenrecord）")
         for i, img in enumerate(result.images, start=1):
             lines.append(f"  image {i} = {img.label}（{img.width}x{img.height}）路径：{img.path}")
         if result.notes:
@@ -1801,6 +1854,155 @@ class MumuVmPlugin(Star):
         if len(times) > limit:
             out.append(f"…共{len(times)}帧")
         return out
+
+    # ------------------------------------------------------------------ 媒体辅助
+    def _media_tools_enabled(self) -> bool:
+        return bool(self._cfg("media_assist_enable", True))
+
+    @filter.llm_tool(name="mumu_phone_media_status")
+    async def mumu_phone_media_status(self, event: AstrMessageEvent) -> str:
+        """查看媒体辅助（录屏/录音 + STT/音频模型/视觉转述）的可用状态。无参数。"""
+        guard = self._mode_guard()
+        if guard:
+            return guard
+        self._touch("media_status")
+        return self.media.status_text() + self._tail()
+
+    @filter.llm_tool(name="mumu_phone_record_start")
+    async def mumu_phone_record_start(self, event: AstrMessageEvent) -> str:
+        """开始后台录屏（录制期间可以继续操作手机、截图/多帧采样）。
+
+        录完后调用 mumu_phone_record_stop 停止，并可选让视觉/全模态模型转述画面。
+        只有配置里开启 media_assist_enable 才可用；建议先看 mumu_phone_media_status。
+        """
+        guard = self._mode_guard()
+        if guard:
+            return guard
+        if not self._media_tools_enabled():
+            return "媒体辅助已关闭（media_assist_enable=false），请在插件配置里开启。"
+        result = await self.media.start_video()
+        self._diag(f"mumu_phone_record_start ok={result.ok} {util.truncate(result.text, 120)}")
+        if result.ok:
+            self._touch("record_start")
+        return result.text + self._tail()
+
+    @filter.llm_tool(name="mumu_phone_record_stop")
+    async def mumu_phone_record_stop(
+        self,
+        event: AstrMessageEvent,
+        question: str = "",
+        describe: bool = True,
+        return_frames: bool = False,
+    ) -> Any:
+        """停止录屏，可选让视觉/全模态模型把画面转述成文字返回给主模型。
+
+        Args:
+            question(string): 你希望转述模型重点关注什么（如"视频里在说什么/页面上的文字"）
+            describe(boolean): 是否调用视觉/全模态模型转述画面，默认 true（需 omni_assist_enable）
+            return_frames(boolean): 是否把抽出的关键帧也作为图片返回（主模型有 image 模态时用）
+        """
+        guard = self._mode_guard()
+        if guard:
+            return guard
+        if not self._media_tools_enabled():
+            return "媒体辅助已关闭（media_assist_enable=false），请在插件配置里开启。"
+        result = await self.media.stop_video()
+        if not result.ok:
+            return result.text + self._tail()
+        self.media.begin_processing()
+        flags = self.media.assist_flags()
+        video_path = Path(str(result.info.get("path") or ""))
+        parts = [result.text]
+        frames: list[Path] = []
+        if describe and flags.get("omni"):
+            if video_path.exists():
+                ok, description, frames = await self.media.describe_video(video_path, question)
+                parts.append(("视觉/全模态转述：\n" + description) if ok else description)
+            else:
+                parts.append("视觉转述失败：录屏文件不存在")
+        elif describe:
+            parts.append("（omni_assist_enable 未开启，跳过画面转述；需要时可在配置开启）")
+        if return_frames and not frames and video_path.exists():
+            frames = await self.media.extract_frames(video_path)
+        if return_frames and frames:
+            payload = [path.read_bytes() for path in frames if path.exists()]
+            self._touch("record_stop", util.truncate(question, 60))
+            await self.media.cleanup_outputs()
+            self.media.end_processing()
+            return self._call_result_images(
+                "\n\n".join(parts) + f"\n\n附 {len(payload)} 张关键帧。" + self._tail(),
+                payload,
+                mimes=["image/jpeg"] * len(payload),
+            )
+        self._touch("record_stop", util.truncate(question, 60))
+        await self.media.cleanup_outputs()
+        self.media.end_processing()
+        return "\n\n".join(parts) + self._tail()
+
+    @filter.llm_tool(name="mumu_phone_hear_start")
+    async def mumu_phone_hear_start(self, event: AstrMessageEvent) -> str:
+        """开始后台录音（抓 Windows 默认扬声器输出，录制期间可继续操作手机）。
+
+        录完调用 mumu_phone_hear_stop 停止，可做 STT 转写和/或交给音频多模态模型描述。
+        只有配置里开启 media_assist_enable 才可用。
+        """
+        guard = self._mode_guard()
+        if guard:
+            return guard
+        if not self._media_tools_enabled():
+            return "媒体辅助已关闭（media_assist_enable=false），请在插件配置里开启。"
+        result = await self.media.start_audio()
+        self._diag(f"mumu_phone_hear_start ok={result.ok} {util.truncate(result.text, 120)}")
+        if result.ok:
+            self._touch("hear_start")
+        return result.text + self._tail()
+
+    @filter.llm_tool(name="mumu_phone_hear_stop")
+    async def mumu_phone_hear_stop(
+        self,
+        event: AstrMessageEvent,
+        transcribe: bool = True,
+        describe: bool = False,
+        question: str = "",
+    ) -> str:
+        """停止录音，可选 STT 转写语音/让音频多模态模型描述听到的声音。
+
+        Args:
+            transcribe(boolean): 是否做 STT 转写，默认 true（需 stt_assist_enable）
+            describe(boolean): 是否让音频多模态模型描述声音，默认 false（需 audio_llm_assist_enable）
+            question(string): 你希望音频转述模型重点关注什么
+        """
+        guard = self._mode_guard()
+        if guard:
+            return guard
+        if not self._media_tools_enabled():
+            return "媒体辅助已关闭（media_assist_enable=false），请在插件配置里开启。"
+        result = await self.media.stop_audio()
+        if not result.ok:
+            return result.text + self._tail()
+        self.media.begin_processing()
+        flags = self.media.assist_flags()
+        audio_path = Path(str(result.info.get("path") or ""))
+        parts = [result.text]
+        did = False
+        if transcribe and flags.get("stt"):
+            ok, text = await self.media.transcribe_audio(audio_path)
+            parts.append(("STT 转写：\n" + text) if ok else text)
+            did = True
+        elif transcribe:
+            parts.append("（stt_assist_enable 未开启，跳过 STT 转写）")
+        if describe and flags.get("audio_llm"):
+            ok, text = await self.media.describe_audio(audio_path, question)
+            parts.append(("音频模型描述：\n" + text) if ok else text)
+            did = True
+        elif describe:
+            parts.append("（audio_llm_assist_enable 未开启，跳过音频模型描述）")
+        if not did:
+            parts.append("未执行任何转述；如需 STT/音频模型请先在插件配置里开启对应开关。")
+        self._touch("hear_stop", util.truncate(question, 60))
+        await self.media.cleanup_outputs()
+        self.media.end_processing()
+        return "\n\n".join(parts) + self._tail()
 
     @filter.llm_tool(name="mumu_phone_ui")
     async def mumu_phone_ui(
