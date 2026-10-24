@@ -24,8 +24,9 @@
 | 🖱 精确操作 | 点击（支持按文字/UI 编号直接点）、长按、滑动/滚动、按键、中文/emoji 输入（自带 ADBKeyboard，自动安装） |
 | 🧭 UI 树 | `mumu_phone_ui` 返回可点击/可输入元素（中心坐标 + flags），比截图找按钮准 |
 | 📱 App/系统 | 前台应用、已安装列表、搜索、启动、打开链接、强停、安装/卸载 APK、电量/网络/IP/亮度/音量/旋转/解锁/通知栏/任意 shell |
-| ✂️ 玩手机模式精简 | 普通聊天只注入 4 个轻量手机工具；进入手机模式后**只保留 25 个手机工具**（+ 可配置的 `send_message_to_user` 和记忆插件工具），并裁剪对话历史、附加内容与系统提示，保证速度 |
+| ✂️ 玩手机模式精简 | 普通聊天只注入 4 个轻量手机工具；进入手机模式后**只保留 26 个手机工具**（+ 可配置的 `send_message_to_user` 和记忆插件工具），并裁剪对话历史、附加内容与系统提示，保证速度 |
 | 🧰 同轮进出手机模式 | **由 Agent 自己判断后调用 `mumu_phone_play` 进入**（默认不再靠聊天关键词自动触发，避免误触）；进入后**当前这一轮**的工具组立即换成完整手机工具；调用 `mumu_phone_exit` 收手后，同一轮回答内自动换回普通工具，可以继续做其它任务，**不会中断本次回答** |
+| 🧠 记忆可切换 | iris 兼容开关（`iris_compat_enable`）可一键关闭对 iris 的注入/写入/工具依赖；关闭后改用**插件自带本地记忆**：收手总结与操作技巧自动保存，可用 `mumu_phone_memory` 做**语义检索**（Embedding Provider，缺失时关键词兜底），iris 开着时也额外存一份 |
 | 📨 打扰拦截 | 玩手机时来消息：不回复正文，只自动回"正在玩手机"，并把消息入队 + 在后续工具结果/系统提示中通知 Agent，由 Agent 自己决定是否用 `mumu_phone_say` 回复 |
 | 🤖 自主玩手机 | 主 Agent 回合结束后可自动转入后台自主模式继续玩；也支持**空闲 N 分钟自动开始**、**指定时间定时开始**、每日次数/时长预算；到点/空闲/Agent 主动都能收手并关掉模拟器 |
 | 🧠 连续性 | `mumu_phone_diary` 记录每轮"玩到哪了"，跨轮次/跨回合保持上下文 |
@@ -87,7 +88,7 @@
 
 ## 4. 工具列表
 
-普通聊天只注入前 4 个（轻量，含最近操作回顾）；进入手机模式后注入全部 25 个（外加可配置的记忆插件工具）：
+普通聊天只注入前 4 个（轻量，含最近操作回顾）；进入手机模式后注入全部 26 个（外加可配置的记忆插件工具）：
 
 | 工具 | 作用 |
 | --- | --- |
@@ -110,6 +111,7 @@
 | `mumu_phone_say` | 给用户发消息 / 回复指定待处理消息 |
 | `mumu_phone_diary` | 玩手机日记（get/add） |
 | `mumu_phone_lesson` | 可选记录一条操作经验（遇到什么情况→该怎么做），收手时整理成《操作教程总结》单独写长期记忆 |
+| `mumu_phone_memory` | 检索/补充插件自带本地长期记忆：`action=search/recent/add`、`query`、`top_k`、`kind=session\|lesson\|note`；语义检索优先 Embedding，缺失时关键词兜底 |
 | `mumu_phone_media_status` | 查看媒体辅助开关、录音后端、录制状态 |
 | `mumu_phone_record_start` / `mumu_phone_record_stop` | 后台录屏（期间可继续操作/截图）；stop 可抽帧交给视觉/全模态模型转述，`return_frames=true` 时也把关键帧作为图片返回 |
 | `mumu_phone_hear_start` / `mumu_phone_hear_stop` | 后台录音（WASAPI 进程 loopback，只录 MuMu 进程声音，期间可继续操作）；stop 可 STT 转写、音频多模态模型描述 |
@@ -142,7 +144,11 @@
 | `mode_idle_timeout_sec` | 180 | 手机模式空闲多久自动收手 |
 | `continue_after_turn` | true | 主 Agent 回合结束后自动转后台自主玩 |
 | `interrupt_hint_text` / `interrupt_hint_cooldown_sec` | 正在玩手机，稍等～ / 60 | 打扰提示与冷却（只作用于 @/触发词消息） |
-| `summary_to_memory` / `summary_memory_sink` / `iris_memory_tool_name` | true / iris_l2 / save_memory | 收尾总结写入长期记忆（默认 iris L2，不发聊天）；默认不截断，可用 `summary_max_chars` 限制 |
+| `summary_to_memory` / `summary_memory_sink` / `iris_memory_tool_name` | true / iris_l2 / save_memory | 收尾总结写入长期记忆（默认 iris L2，不发聊天）；默认不截断，可用 `summary_max_chars` 限制；本地记忆总会另存一份 |
+| `iris_compat_enable` | true | iris 记忆插件兼容总开关：关闭后完全不再调用/注入 iris，改用插件本地记忆（不影响手机模式其它功能） |
+| `local_memory_enable` / `local_memory_embedding_provider_id` | true / 空 | 插件自带本地记忆（使用记录/操作技巧）总开关；语义检索用的 Embedding Provider（留空自动选，缺失则关键词兜底） |
+| `local_memory_context_enable` / `local_memory_context_top_k` / `local_memory_context_max_chars` / `local_memory_context_ttl_sec` | true / 3 / 600 / 600 | 玩手机时自动注入少量本地记忆（iris 关闭或 iris 无结果时生效）及注入预算/缓存 |
+| `local_memory_max_entries` | 1000 | 本地记忆最多保留条数（超出时优先保留操作技巧与较新记录） |
 | `lesson_note_enable` / `lesson_memory_sink` / `lesson_memory_tags` | true / iris_l2 / 玩手机,教程,经验,操作技巧 | Agent 可选的《操作教程总结》：记了才写，单独一条长期记忆 |
 | `notify_on_finish` / `finish_notify_text` | false / 手机收起来了。 | 收手时是否额外发一句短提示 |
 | `enter_keywords` / `stop_keywords` | 见 schema | 关键词（`enter_keywords` 仅在 `natural_language_entry=true` 时生效；`stop_keywords` 用于玩手机时用户喊停） |
@@ -154,7 +160,7 @@
 | `vm_mode_cache_friendly` | false | 缓存友好模式：改用追加注入、不裁剪历史/附加内容、手机提示块保持稳定（利于模型前缀缓存，token 更多） |
 | `phone_persona_prompt` / `phone_persona_fallback_astrbot` | 空（回退会话人格）/ true | 手机模式和自主玩的单独人格提示词（不读系统提示词，可自己填角色卡；留空则回退会话人格） |
 | `phone_iris_inject_query` / `phone_iris_inject_keywords` | `{owner} 最近在做什么 近况 项目 喜好` / 近况,项目,喜好,视频,评论 | 注入 iris 时的检索语句模板（支持 `{owner}` / `{goal}`）与追加关键词 |
-| `phone_iris_tools_enable` / `phone_iris_tool_names` | true / search_memory,get_profile,save_memory | 玩手机时额外暴露给 Agent 的记忆插件工具 |
+| `phone_iris_tools_enable` / `phone_iris_tool_names` | true / search_memory,get_profile,save_memory | 玩手机时额外暴露给 Agent 的记忆插件工具（需 `iris_compat_enable=true`） |
 | `vm_mode_extra_tools` | send_message_to_user | 手机模式额外保留的工具 |
 | `autoplay_enable` | true | 允许空闲自动玩 |
 | `autoplay_goals` | 三条目标 | 空闲玩的目标池，轮流使用 |
@@ -176,11 +182,11 @@
 - **隐藏窗口**：`MuMuManager.exe control -v <idx> hide_window`；启动后轮询确认（MuMu 窗口可能在初始化后又弹出来）。隐藏后 adb screencap / screenrecord 仍然正常，实测画面持续渲染。**但实测隐藏窗口时 MuMu 引擎会停掉音频输出**（进程 loopback 抓到的 RMS=0）；所以录音开始前插件会把 MuMu 窗口移到屏幕外再 `show_window`（用户看不到，声音恢复），录完再 `hide_window` + 隐藏所有 MuMu 窗口。
 - **连续采样**：稀疏采样（间隔 ≥0.8s）直接连续 `screencap`；密集采样走 `screenrecord` → pull → ffmpeg 按采样间隔抽帧；每帧可裁剪/缩放/打时间戳标签，按 `mode` 输出"一帧一张图"或"多帧图版"，一次调用把 N 张图（`ImageContent`）一起返回，AstrBot 会把它们全部放进模型上下文。
 - **精简注入**：`@filter.on_llm_request` 在请求组装后：
-  - 手机模式：从 ToolManager **重建**只含 25 个手机工具（+白名单 + 可配置记忆插件工具）的 ToolSet（不依赖其他插件/persona 是否改写过工具集），裁剪 `contexts` 到最近 N 条，清空 `extra_user_content_parts`，追加手机操作提示；
+  - 手机模式：从 ToolManager **重建**只含 26 个手机工具（+白名单 + 可配置记忆插件工具）的 ToolSet（不依赖其他插件/persona 是否改写过工具集），裁剪 `contexts` 到最近 N 条，清空 `extra_user_content_parts`，追加手机操作提示；
   - 普通模式：移除 16 个重型手机工具，只补 4 个轻量工具。
 - **自主玩**：`context.tool_loop_agent(...)` + 合成 `CronMessageEvent` 驱动多轮小回合（每轮最多 `autoplay_max_steps_per_round` 步，轮间停顿），每轮写日记；工具集含 `mumu_phone_exit`，Agent 随时可安全收手；到时间/预算自动收手。
 - **打扰队列**：`on_any_message` 高优先级拦截（仅 @/唤醒前缀 消息）→ 入队 + 直接 `event.send()` 提示 + `event.stop_event()`，不触发 LLM；普通群聊消息直接放过。
-- **总结入记忆**：收手时把"目标 + 时长 + 最近几轮小结"整理成总结（默认**不截断**，可用 `summary_max_chars` 限制），调用 iris 的 `save_memory` 工具写 L2（合成事件带真实 user/group 身份），默认不再发聊天消息；Agent 主动用 `mumu_phone_lesson` 记过经验时，会再单独写一条《操作教程总结》。
+- **总结入记忆**：收手时把"目标 + 时长 + 最近几轮小结"整理成总结（默认**不截断**，可用 `summary_max_chars` 限制），**先存插件本地记忆**，再按配置调用 iris 的 `save_memory` 写 L2（`iris_compat_enable=false` 时完全不碰 iris）；Agent 主动用 `mumu_phone_lesson` 记过经验时，会再单独写一条《操作教程总结》；本地记忆支持语义检索（`mumu_phone_memory`）。
 - **MuMu 按需启停**：只在进入手机模式/自主玩时启动 VM；收手时 `MuMuManager control shutdown` 关闭 VM，并可选地结束本次使用后残留的 MuMu 用户级进程（`close_mumu_app_on_exit`，默认开）。
   - **插件不修改任何系统设置**：不碰注册表、自启动项、Windows 服务的启动类型，也不会在后台定时轮询/清理 MuMu；这些属于插件生命周期之外的系统级优化，需要由用户手动做（见下面「系统级优化（手动）」）。
 
@@ -257,7 +263,21 @@ astrbot_plugin_mumu_vm/
   - 需要用户自行安装 MuMu 模拟器与（可选）ffmpeg；本项目不包含这些软件的二进制，也不代表其官方立场。
 - **安全提示**：插件会让 AI 真实操作模拟器中的 App 与账号，请自行控制账号与预算风险；提示词已禁止支付/转账/密码/广告安装等高风险操作，但不能保证模型一定遵守。
 
+### Iris Memory 兼容与许可证
+
+- [Iris Memory](https://github.com/leafliber/astrbot_plugin_iris_memory)（`astrbot_plugin_iris_memory`，作者 Leafiber）采用 **AGPL-3.0**。其 README 没有单独的用户协议/商业限制条款，主要要求是：不要与旧的 `iris_chat_memory` / `iris_reply` 同开、按它的说明设置 `provider_ltm_settings.group_message_max_cnt=0` 等。
+- 本插件**不复制、不修改、不内置、也不 import** Iris 的代码；只通过 AstrBot 已注册的 LLM 工具（`get_profile` / `search_memory` / `save_memory`）做**接口级调用**。按通常理解，这属于独立程序通过公开接口协作，不会让本插件被 AGPL "传染"；如果你修改/分发 Iris 本体，请自行遵守 AGPL（含网络使用条款）。以上不是法律意见，正式分发前建议自行确认。
+- 为降低接口变动/许可依赖，v1.6.0 增加 **`iris_compat_enable`**：关闭后插件完全不再调用 Iris（不注入、不写 L2、不暴露其工具），改用插件自带本地记忆；Iris 开着时本地记忆也会额外存一份，可随时切换。
+- 本插件自身仍按仓库 [LICENSE](./LICENSE)（MIT）发布。
+
 ## 11. 版本
+
+- v1.6.0（2026-10-24）
+  - 新增 **`iris_compat_enable`** 兼容开关：关闭后完全不再调用/注入 Iris，改用插件自带本地记忆；Iris 开着时也会额外保存一份到本地。
+  - 新增**插件自带本地长期记忆**：收手总结（使用记录）与 `mumu_phone_lesson`（操作技巧）自动保存到 `local_memory/memory.json`；可用 Embedding Provider 做**语义检索**，没有 Embedding 时自动退化为关键词/字符 bigram 检索。
+  - 新增工具 **`mumu_phone_memory`**（`search` / `recent` / `add`），手机模式/自主玩时 Agent 可主动检索以前的经验；玩手机/自主玩提示词会按相关度注入少量本地记忆背景（Iris 关闭或 Iris 无结果时生效）。
+  - 新增配置：`iris_compat_enable`、`local_memory_enable`、`local_memory_embedding_provider_id`、`local_memory_max_entries`、`local_memory_context_enable/top_k/max_chars/ttl_sec`。
+  - 手机工具数 25 → 26（新增 `mumu_phone_memory`）。
 
 - v1.5.0（2026-10-24）
   - 手机模式改为 **由 Agent 判断后调用 `mumu_phone_play` 进入**：默认关闭聊天关键词自动进入（`natural_language_entry=false`），不再"说句话就误开机"；普通聊天仍注入 4 个轻量手机工具供 Agent 决策。

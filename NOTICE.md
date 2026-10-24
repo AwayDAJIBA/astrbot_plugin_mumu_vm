@@ -29,6 +29,14 @@
 - 用户需自行安装 MuMu 模拟器（网易）与可选的 ffmpeg；相关名称与商标归各自所有者，
   本项目与其官方无关联。
 
+### Iris Memory（可选兼容，不内置）
+
+- 项目：<https://github.com/leafliber/astrbot_plugin_iris_memory>
+- 许可证：**AGPL-3.0**
+- 用途：本插件可选择把手机使用总结/操作技巧写入 Iris L2，并在玩手机时取其少量画像/记忆作为背景。
+- 实现方式：仅通过 AstrBot 注册的 LLM 工具（`save_memory` / `search_memory` / `get_profile`）做接口级调用，**不复制、不修改、不内置、不 import** Iris 源码；Iris 是独立插件，用户需自行安装并遵守其 AGPL-3.0 许可证（包括修改/分发时的源码开放与网络使用条款）。
+- 不想依赖 Iris 时，可在本插件配置里关闭 `iris_compat_enable`，改用插件自带本地记忆。
+
 ## 4. 安全提示
 
 插件会让 AI 真实操作模拟器中的 App 与账号。提示词中已禁止支付/转账/输入支付密码/修改账号安全设置/

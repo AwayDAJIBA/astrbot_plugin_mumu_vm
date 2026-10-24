@@ -169,14 +169,14 @@ class AutoplayEngine:
                     f"autoplay 人格注入 source={self._persona_id or '—'} "
                     f"chars={len(self._persona_prompt)} enabled=True"
                 )
-            # 少量 iris 背景（用户是谁/最近在干嘛），供评论时参考，避免把大段记忆搬进提示词
+            # 少量记忆背景（iris 或插件本地记忆）：用户是谁/最近在干嘛，供评论时参考
             self._iris_context = ""
             try:
-                self._iris_context = await self.plugin.get_iris_phone_context()
+                self._iris_context = await self.plugin.get_phone_memory_context()
             except Exception as exc:
-                self.plugin._diag(f"autoplay 取 iris 背景失败: {exc!r}")
+                self.plugin._diag(f"autoplay 取记忆背景失败: {exc!r}")
             self.plugin._diag(
-                f"autoplay iris 背景 chars={len(self._iris_context)}"
+                f"autoplay 记忆背景 chars={len(self._iris_context)}"
             )
             # 开机后先截一张，写进日记
             shot = None
@@ -306,6 +306,12 @@ class AutoplayEngine:
                 "录制时仍可继续操作手机：mumu_phone_record_start/stop 后台录屏，停止时可让视觉/全模态模型转述画面；"
                 "mumu_phone_hear_start/stop 后台录音（只录 MuMu 声音，不录 Windows 其它应用），停止时可 STT 转写/让音频模型描述声音；"
                 "用 mumu_phone_media_status 查看当前可用的媒体能力。"
+            )
+        if "mumu_phone_memory" in {tool.name for tool in tools.tools}:
+            system_prompt += (
+                "\n\n# 本地记忆\n"
+                "可以用 mumu_phone_memory 语义检索以前玩手机的使用记录和操作技巧；"
+                "遇到好用的操作/踩坑时也可以用 mumu_phone_lesson 记一条。"
             )
         max_steps = int(util.clamp(int(self._cfg("autoplay_max_steps_per_round", 28)), 4, 120))
         resp = await self.context.tool_loop_agent(

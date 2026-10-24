@@ -34,6 +34,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 
 from .vm.autoplay import AutoplayEngine
 from .vm.media import PhoneMedia
+from .vm.memory import LocalMemoryStore
 from .vm.phone import Phone
 from .vm.state import SessionState
 from .vm import util
@@ -45,7 +46,7 @@ DESC = (
     "UI 点击、中文输入、应用/系统控制、玩手机模式精简提速、被打扰时只回“正在玩手机”、"
     "空闲/定时自主玩手机与随时收手）。"
 )
-VERSION = "v1.5.0"
+VERSION = "v1.6.0"
 
 # 精简模式（普通聊天）下暴露的工具：让 Agent 知道有手机可用，又不占太多上下文
 COMPACT_TOOLS = {
@@ -71,6 +72,7 @@ FULL_ONLY_TOOLS = {
     "mumu_phone_say",
     "mumu_phone_diary",
     "mumu_phone_lesson",
+    "mumu_phone_memory",
     "mumu_phone_exit",
     "mumu_phone_media_status",
     "mumu_phone_record_start",
@@ -107,6 +109,7 @@ class MumuVmPlugin(Star):
         )
         self.autoplay = AutoplayEngine(self)
         self.media = PhoneMedia(self)
+        self.local_memory = LocalMemoryStore(self)
         self._bg_task: asyncio.Task | None = None
         # 当前正在跑的普通 Agent 请求（umo -> ProviderRequest）。
         # click 进入/退出手机模式时动态换工具组，让同一轮回答可以继续做别的事。
@@ -118,6 +121,8 @@ class MumuVmPlugin(Star):
         self._kick_task: asyncio.Task | None = None
         self._iris_ctx_cache: tuple[float, str] = (0.0, "")
         self._iris_ctx_lock = asyncio.Lock()
+        self._local_ctx_cache: tuple[float, str] = (0.0, "")
+        self._local_ctx_lock = asyncio.Lock()
         self._last_skip_diag = 0.0
 
     # ------------------------------------------------------------------ 生命周期
@@ -428,6 +433,7 @@ class MumuVmPlugin(Star):
                     file_name="lessons.md",
                     label="操作教程总结",
                     sink_cfg="lesson_memory_sink",
+                    kind="lesson",
                 )
             else:
                 self._diag("操作教程总结：本次 Agent 没有主动记录经验，跳过")
@@ -526,13 +532,29 @@ class MumuVmPlugin(Star):
         file_name: str,
         label: str,
         sink_cfg: str = "summary_memory_sink",
+        kind: str = "",
     ) -> str:
-        """把一段文本写长期记忆（默认 iris L2），同时本地留档。返回简短结果。"""
+        """把一段文本写长期记忆（iris + 插件本地），同时本地留档。返回简短结果。"""
         if not content.strip():
             return ""
         if not bool(self._cfg("summary_to_memory", True)):
             return "summary_to_memory=false，已跳过"
-        sink = str(self._cfg(sink_cfg, "iris_l2") or "iris_l2").strip().lower()
+        kind = kind or ("lesson" if file_name == "lessons.md" else "session")
+        # 插件自带本地记忆：即使 iris 开着也额外存一份，便于迁移/语义检索
+        local_result = ""
+        if bool(self._cfg("local_memory_enable", True)):
+            try:
+                entry = await self.local_memory.add(
+                    kind=kind,
+                    text=content,
+                    tags=tags,
+                    source=label,
+                )
+                if entry:
+                    local_result = f"本地记忆已存（共 {self.local_memory.count()} 条）"
+                    self._local_ctx_cache = (0.0, "")
+            except Exception as exc:
+                self._diag(f"{label}写本地记忆异常: {util.truncate(repr(exc), 160)}")
         # 本地留档（永远写，方便排查）
         try:
             mem_dir = self.data_dir / "memory"
@@ -541,9 +563,13 @@ class MumuVmPlugin(Star):
                 f.write(f"\n## {util.now_str()}\n{content}\n")
         except Exception:
             pass
+        sink = str(self._cfg(sink_cfg, "iris_l2") or "iris_l2").strip().lower()
         if sink in ("none", "off", "false", "local"):
             self._diag(f"{label}只写本地（sink={sink}）chars={len(content)}")
-            return f"只写本地 chars={len(content)}"
+            return (local_result + "；" if local_result else "") + f"只写本地 chars={len(content)}"
+        if not self._iris_compat_enabled():
+            self._diag(f"{label} iris 兼容已关闭，仅写本地记忆 chars={len(content)}")
+            return (local_result or "iris 兼容已关闭") + "；未写 iris"
         tool_name = str(self._cfg("iris_memory_tool_name", "save_memory") or "save_memory")
         iris_result = ""
         try:
@@ -575,11 +601,15 @@ class MumuVmPlugin(Star):
                 iris_result = util.truncate(str(result or ""), 160)
         except Exception as exc:
             iris_result = f"写入 iris L2 异常: {util.truncate(repr(exc), 160)}"
-        self._diag(f"{label}写入长期记忆 sink={sink} chars={len(content)} result={iris_result}")
-        return iris_result
+        self._diag(
+            f"{label}写入长期记忆 sink={sink} chars={len(content)} "
+            f"local={local_result or '—'} result={iris_result}"
+        )
+        parts = [item for item in (local_result, iris_result) if item]
+        return "；".join(parts) or "已处理"
 
     async def _persist_session_summary(self, summary: str) -> None:
-        """收尾总结写长期记忆：默认调用 iris 插件的 save_memory 工具写 L2。"""
+        """收尾总结写长期记忆：默认调用 iris 插件的 save_memory 工具写 L2（本地另存一份）。"""
         if not summary.strip():
             return
         await self._persist_memory_text(
@@ -587,6 +617,7 @@ class MumuVmPlugin(Star):
             tags=["玩手机", "手机操作", "自动记录"],
             file_name="sessions.md",
             label="收尾总结",
+            kind="session",
         )
 
     def _patch_event_identity_for_memory(self, event: AstrMessageEvent) -> None:
@@ -877,7 +908,7 @@ class MumuVmPlugin(Star):
         if bool(self._cfg("slim_system_prompt", True)):
             block = self._vm_system_block(cache_friendly=cache_mode)
             persona_source, persona_prompt = await self.resolve_phone_persona()
-            iris_ctx = await self.get_iris_phone_context()
+            memory_ctx = await self.get_phone_memory_context()
             replace_mode = (
                 bool(self._cfg("vm_mode_replace_system_prompt", True)) and not cache_mode
             )
@@ -888,12 +919,12 @@ class MumuVmPlugin(Star):
                 parts: list[str] = []
                 if persona_prompt:
                     parts.append("# Persona Instructions\n\n" + persona_prompt)
-                if iris_ctx:
-                    parts.append(iris_ctx)
+                if memory_ctx:
+                    parts.append(memory_ctx)
                 parts.append(block)
                 req.system_prompt = "\n\n".join(parts)
             else:
-                extra = iris_ctx
+                extra = memory_ctx
                 req.system_prompt = (
                     (req.system_prompt or "").rstrip()
                     + (("\n\n" + extra) if extra else "")
@@ -906,7 +937,8 @@ class MumuVmPlugin(Star):
             self._diag(
                 f"注入手机模式提示词 prompt_mode={'cache' if cache_mode else 'slim'} "
                 f"mode={'replace' if replace_mode else 'append'} "
-                f"block={len(block)}字 iris={len(iris_ctx)}字 "
+                f"block={len(block)}字 memory={len(memory_ctx)}字 "
+                f"iris_compat={self._iris_compat_enabled()} "
                 f"iris_tools={sorted(iris_names)} "
                 f"system_prompt {before_len}->{len(req.system_prompt)}字 "
                 f"persona_source={persona_source or '—'} persona_chars={len(persona_prompt)} "
@@ -933,12 +965,18 @@ class MumuVmPlugin(Star):
         return "", ""
 
     # ------------------------------------------------------------------ iris 少量背景
+    def _iris_compat_enabled(self) -> bool:
+        """iris 兼容总开关：关闭后不再调用/注入 iris，改用插件自带本地记忆。"""
+        return bool(self._cfg("iris_compat_enable", True))
+
     async def get_iris_phone_context(self, force: bool = False) -> str:
         """取一小段 iris 记忆/画像，供 Agent 评论时知道用户是谁、最近在干嘛。
 
         只取少量（默认画像+3 条记忆、总长 ≤600 字），不把 iris 的大段注入搬进来；
-        iris 未安装/不可用时返回空字符串，不影响手机模式。
+        iris 未安装/不可用/兼容开关关闭时返回空字符串，不影响手机模式。
         """
+        if not self._iris_compat_enabled():
+            return ""
         if not bool(self._cfg("phone_iris_context_enable", True)):
             return ""
         if not self.state.owner_umo:
@@ -960,6 +998,8 @@ class MumuVmPlugin(Star):
 
     def _iris_tool_names(self) -> set[str]:
         """手机模式/自主玩额外暴露的记忆插件工具（默认 iris 的查询/画像/保存）。"""
+        if not self._iris_compat_enabled():
+            return set()
         if not bool(self._cfg("phone_iris_tools_enable", True)):
             return set()
         raw = str(
@@ -1045,6 +1085,63 @@ class MumuVmPlugin(Star):
         )
         return text
 
+    async def get_phone_memory_context(self, force: bool = False) -> str:
+        """手机模式/自主玩的少量记忆背景：优先 iris，关掉/没结果时用本地语义记忆。"""
+        if self._iris_compat_enabled():
+            iris_ctx = await self.get_iris_phone_context(force=force)
+            if iris_ctx:
+                return iris_ctx
+        if not bool(self._cfg("local_memory_context_enable", True)):
+            return ""
+        return await self._build_local_memory_context(force=force)
+
+    async def _build_local_memory_context(self, force: bool = False) -> str:
+        """从插件自带本地记忆里做语义检索，压成一小段注入提示词。"""
+        if not self.local_memory.enabled() or not self.state.owner_umo:
+            return ""
+        ttl = float(
+            util.clamp(float(self._cfg("local_memory_context_ttl_sec", 600)), 30, 3600)
+        )
+        now = time.time()
+        if not force and self._local_ctx_cache[1] and now - self._local_ctx_cache[0] < ttl:
+            return self._local_ctx_cache[1]
+        async with self._local_ctx_lock:
+            if (
+                not force
+                and self._local_ctx_cache[1]
+                and time.time() - self._local_ctx_cache[0] < ttl
+            ):
+                return self._local_ctx_cache[1]
+            owner = self.state.owner_name or "用户"
+            query = self._iris_inject_query(owner)
+            top_k = int(util.clamp(int(self._cfg("local_memory_context_top_k", 3)), 1, 8))
+            max_chars = int(
+                util.clamp(int(self._cfg("local_memory_context_max_chars", 600)), 100, 2000)
+            )
+            try:
+                entries = await self.local_memory.search(
+                    query, top_k=top_k, kinds=["session", "lesson"]
+                )
+            except Exception as exc:
+                self._diag(f"本地记忆检索失败: {util.truncate(repr(exc), 160)}")
+                entries = []
+            if not entries:
+                self._local_ctx_cache = (time.time(), "")
+                return ""
+            body = self.local_memory.format_entries(entries, max_chars=max_chars - 120)
+            text = (
+                "# 本地长期记忆（手机使用记录/操作技巧，按相关度；只在确实相关时自然用，"
+                "不要外泄隐私，不要提“记忆/资料/我是AI”）\n"
+                + body
+            )
+            text = util.truncate(text, max_chars)
+            self._local_ctx_cache = (time.time(), text)
+            self._diag(
+                f"本地记忆少量背景注入 {len(text)}字 entries={len(entries)} "
+                f"query={util.truncate(query, 80)!r}"
+            )
+            return text
+
     async def _call_phone_plugin_tool(self, name: str, args: dict, event) -> str:
         """调用其它插件注册的 LLM 工具（这里是 iris 的 get_profile / search_memory）。"""
         try:
@@ -1127,6 +1224,11 @@ class MumuVmPlugin(Star):
             lines.append(
                 "经验：遇到踩坑或好用的操作技巧时，可用 `mumu_phone_lesson(situation, action)` 记一条；"
                 "收手时会整理成《操作教程总结》单独写入长期记忆（可选，不记也行）。"
+            )
+        if self.local_memory.enabled():
+            lines.append(
+                "本地记忆：`mumu_phone_memory` 可语义检索以前的使用记录/操作技巧；"
+                "收手总结与 `mumu_phone_lesson` 会同时保存到插件本地（不依赖 iris），遇到类似任务可以先搜一下。"
             )
         if self._media_tools_enabled():
             flags = self.media.assist_flags()
@@ -1664,6 +1766,14 @@ class MumuVmPlugin(Star):
                 lines.append(self.media.status_text())
             except Exception:
                 pass
+        try:
+            lines.append(self.local_memory.stats_text())
+            lines.append(
+                "iris 兼容："
+                + ("开启（注入/写入/记忆工具都走 iris）" if self._iris_compat_enabled() else "关闭（使用插件本地记忆）")
+            )
+        except Exception:
+            pass
         try:
             persona_source, phone_persona = await self.resolve_phone_persona()
             replace_mode = bool(self._cfg("vm_mode_replace_system_prompt", True))
@@ -2551,6 +2661,86 @@ class MumuVmPlugin(Star):
         return (
             f"已记录操作经验 #{count}：遇到「{util.truncate(situation, 80)}」→ "
             f"{util.truncate(action, 120)}。收手时会作为《操作教程总结》写入长期记忆（可选）。"
+            + self._tail()
+        )
+
+    @filter.llm_tool(name="mumu_phone_memory")
+    async def mumu_phone_memory(
+        self,
+        event: AstrMessageEvent,
+        action: str = "search",
+        query: str = "",
+        top_k: int = 5,
+        kind: str = "all",
+        text: str = "",
+        tags: str = "",
+    ) -> str:
+        """检索/补充插件自带的本地长期记忆（手机使用记录、操作技巧），支持语义检索。
+
+        不依赖 iris：iris 兼容关闭或未安装时，收手总结和操作技巧会保存在插件本地；
+        iris 开着时也会额外存一份。遇到以前做过的类似任务可以先搜一下。
+
+        Args:
+            action(string): search=语义/关键词检索（默认）, recent=最近记忆, add=手动追加一条
+            query(string): 检索语句（search 用，留空=用当前目标和最近记录）
+            top_k(number): 返回条数（1~15）
+            kind(string): all / session（使用记录）/ lesson（操作技巧）/ note
+            text(string): add 时要保存的内容
+            tags(string): add 时的标签（逗号分隔）
+        """
+        guard = self._mode_guard()
+        if guard:
+            return guard
+        if not self.local_memory.enabled():
+            return "本地记忆已关闭（local_memory_enable=false），可到插件配置打开。"
+        k = int(util.clamp(int(top_k or 5), 1, 15))
+        action = (action or "search").strip().lower()
+        kinds = [] if kind.strip().lower() in ("all", "", "全部") else [kind]
+        if action in ("add", "记录", "保存"):
+            if not text.strip():
+                return "text 不能为空。"
+            tag_list = [
+                item.strip()
+                for item in tags.replace("，", ",").split(",")
+                if item.strip()
+            ]
+            add_kind = (
+                kind
+                if kind.strip().lower() not in ("", "all", "全部")
+                else "lesson"
+            )
+            entry = await self.local_memory.add(
+                add_kind, text.strip(), tags=tag_list, source="agent"
+            )
+            if not entry:
+                return "保存失败。"
+            self._local_ctx_cache = (0.0, "")
+            self._touch("memory", util.truncate(text.strip(), 60))
+            return f"已保存到本地记忆（{self.local_memory.stats_text()}）。" + self._tail()
+        if action in ("recent", "最近"):
+            entries = self.local_memory.recent(k, kinds=kinds)
+            if not entries:
+                return "本地记忆里还没有记录。"
+            self._touch("memory", "recent")
+            return (
+                "最近本地记忆：\n"
+                + self.local_memory.format_entries(entries, max_chars=1200)
+                + self._tail()
+            )
+        q = query.strip() or (
+            f"{self.state.owner_name or '用户'} 手机 使用记录 操作技巧 {self.state.goal or ''}"
+        ).strip()
+        entries = await self.local_memory.search(q, top_k=k, kinds=kinds)
+        if not entries:
+            return (
+                "本地记忆没有检索到相关记录。"
+                "（可以先用 mumu_phone_lesson 记录操作技巧；收手总结也会自动保存到本地记忆。）"
+            )
+        self._touch("memory", util.truncate(q, 60))
+        methods = sorted({str(item.get("method") or "") for item in entries})
+        return (
+            f"本地记忆检索结果（{len(entries)} 条，{'/'.join(methods) or '相关度'}）：\n"
+            + self.local_memory.format_entries(entries, max_chars=1200)
             + self._tail()
         )
 

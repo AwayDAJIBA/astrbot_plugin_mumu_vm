@@ -264,6 +264,46 @@
     "description": "玩手机结束后的操作总结是否写入长期记忆（不再发聊天消息），默认开",
     "default": true
   },
+  "iris_compat_enable": {
+    "type": "bool",
+    "description": "是否启用 iris 记忆插件兼容（注入少量背景、写入 L2、暴露其记忆工具）。关闭后完全不再调用 iris，改用插件自带的本地记忆（使用记录/操作技巧，可语义检索）",
+    "default": true
+  },
+  "local_memory_enable": {
+    "type": "bool",
+    "description": "启用插件自带的本地长期记忆：保存手机使用记录与操作技巧（默认额外存一份；iris 关闭时作为唯一记忆后端）",
+    "default": true
+  },
+  "local_memory_embedding_provider_id": {
+    "type": "string",
+    "description": "本地记忆语义检索使用的 Embedding Provider ID；留空=自动使用第一个可用的 Embedding Provider（没有则退化为关键词检索）",
+    "default": ""
+  },
+  "local_memory_max_entries": {
+    "type": "int",
+    "description": "本地记忆最多保留多少条（超出后优先保留操作技巧和较新记录）",
+    "default": 1000
+  },
+  "local_memory_context_enable": {
+    "type": "bool",
+    "description": "玩手机/自主玩时是否自动注入少量本地记忆背景（在 iris 关闭或 iris 无结果时生效）",
+    "default": true
+  },
+  "local_memory_context_top_k": {
+    "type": "int",
+    "description": "自动注入本地记忆时检索多少条",
+    "default": 3
+  },
+  "local_memory_context_max_chars": {
+    "type": "int",
+    "description": "自动注入本地记忆的最大字符数",
+    "default": 600
+  },
+  "local_memory_context_ttl_sec": {
+    "type": "int",
+    "description": "本地记忆背景注入结果缓存秒数（避免每轮重复做 embedding）",
+    "default": 600
+  },
   "summary_max_chars": {
     "type": "int",
     "description": "收尾总结写入长期记忆前的最大字数（0=不截断；默认不截断）",
@@ -346,7 +386,7 @@
   },
   "phone_iris_context_enable": {
     "type": "bool",
-    "description": "玩手机时是否注入少量 iris 记忆/画像（让 Agent 评论时知道用户是谁、最近在干嘛；只取少量，不会搬大段记忆）",
+    "description": "玩手机时是否注入少量 iris 记忆/画像（需 iris_compat_enable=true；只取少量，不会搬大段记忆）",
     "default": true
   },
   "phone_iris_profile_enable": {
@@ -391,7 +431,7 @@
   },
   "phone_iris_tools_enable": {
     "type": "bool",
-    "description": "玩手机时是否把记忆插件的查询工具暴露给 Agent（可临时查记忆/画像/补记忆）",
+    "description": "玩手机时是否把记忆插件的查询工具暴露给 Agent（需 iris_compat_enable=true；可临时查记忆/画像/补记忆）",
     "default": true
   },
   "phone_iris_tool_names": {
