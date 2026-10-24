@@ -21,6 +21,10 @@ from astrbot.api.event import filter
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.agent.tool import ToolSet
+try:
+    from astrbot.core.agent.message import TextPart
+except Exception:  # pragma: no cover
+    TextPart = None  # type: ignore
 from astrbot.core.cron.events import CronMessageEvent
 from astrbot.core.message.components import Image, Plain
 from astrbot.core.message.message_event_result import MessageChain
@@ -41,7 +45,7 @@ DESC = (
     "UI 点击、中文输入、应用/系统控制、玩手机模式精简提速、被打扰时只回“正在玩手机”、"
     "空闲/定时自主玩手机与随时收手）。"
 )
-VERSION = "v1.4.1"
+VERSION = "v1.5.0"
 
 # 精简模式（普通聊天）下暴露的工具：让 Agent 知道有手机可用，又不占太多上下文
 COMPACT_TOOLS = {
@@ -104,6 +108,10 @@ class MumuVmPlugin(Star):
         self.autoplay = AutoplayEngine(self)
         self.media = PhoneMedia(self)
         self._bg_task: asyncio.Task | None = None
+        # 当前正在跑的普通 Agent 请求（umo -> ProviderRequest）。
+        # click 进入/退出手机模式时动态换工具组，让同一轮回答可以继续做别的事。
+        self._active_reqs: dict[str, ProviderRequest] = {}
+        self._req_snapshots: dict[str, dict[str, Any]] = {}
         self._startup_ts = time.time()
         self._entry_lock = asyncio.Lock()
         self._agent_busy = False
@@ -440,6 +448,12 @@ class MumuVmPlugin(Star):
             except Exception as exc:
                 self._diag(f"收尾关模拟器失败: {exc!r}")
         self.state.end()
+        # 如果 Agent 是在某一轮回答中间收手，把这一轮的工具组换回普通工具，
+        # 让它能继续做别的任务（不主动停掉当前回答）。
+        try:
+            self._restore_all_active_requests(hint=True)
+        except Exception as exc:
+            self._diag(f"收手后恢复普通工具组失败: {exc!r}")
         # 会话结束，清掉没处理的排队消息/提示节流记录（属于上一局，不该留到下一局）
         try:
             if self.state.pending:
@@ -789,6 +803,11 @@ class MumuVmPlugin(Star):
             return
         try:
             names: list[str] = []
+            umo = getattr(event, "unified_msg_origin", "") or ""
+            if umo:
+                self._active_reqs[umo] = req
+                # 记录进入手机模式前的普通请求状态，供 Agent 中途收手后恢复
+                self._snapshot_request(umo, req)
             if req.func_tool and getattr(req.func_tool, "tools", None):
                 names = [t.name for t in req.func_tool.tools]
             active_before = self.state.active
@@ -796,6 +815,8 @@ class MumuVmPlugin(Star):
                 await self._slim_for_vm_mode(req)
             else:
                 self._remove_tools(req, FULL_ONLY_TOOLS)
+                # 记下普通模式工具组（可能已被 lazy-tools 等插件过滤），收手后原样恢复
+                self._remember_normal_toolset(umo, req)
             names_after = [t.name for t in req.func_tool.tools] if req.func_tool else []
             full_names: list[str] = []
             try:
@@ -1171,6 +1192,128 @@ class MumuVmPlugin(Star):
         if req.func_tool is not None and not req.func_tool.tools:
             req.func_tool = None
 
+    # --------------------------------------------------------- 同一轮请求内换工具组
+    def _build_normal_tool_set(self):
+        """普通聊天工具组：全量工具里去掉重型手机工具（保留 other plugins 的工具）。"""
+        try:
+            full_set = self.context.get_llm_tool_manager().get_full_tool_set()
+        except Exception as exc:
+            self._diag(f"_build_normal_tool_set 取工具失败: {exc!r}")
+            return None
+        expose_compact = bool(self._cfg("expose_compact_tools_in_normal_mode", True))
+        normal = ToolSet()
+        for tool in full_set.tools:
+            if tool.name in FULL_ONLY_TOOLS:
+                continue
+            if not expose_compact and tool.name in COMPACT_TOOLS:
+                continue
+            normal.add_tool(tool)
+        return normal if normal.tools else None
+
+    def _snapshot_request(self, umo: str, req: ProviderRequest) -> None:
+        """记录进入/退出手机模式前的普通请求状态，供收手后恢复。"""
+        if not umo or umo in self._req_snapshots:
+            return
+        try:
+            self._req_snapshots[umo] = {
+                "system_prompt": req.system_prompt or "",
+                "contexts": list(req.contexts or []),
+                "extra_user_content_parts": list(
+                    getattr(req, "extra_user_content_parts", None) or []
+                ),
+            }
+        except Exception as exc:
+            self._diag(f"_snapshot_request 失败: {exc!r}")
+
+    def _remember_normal_toolset(self, umo: str, req: ProviderRequest) -> None:
+        """记录当前请求的普通工具组，收手后原样换回去（兼容 lazy-tools 等插件过滤）。"""
+        if not umo or req is None:
+            return
+        try:
+            snapshot = self._req_snapshots.setdefault(umo, {})
+            snapshot["normal_tools"] = list(
+                getattr(req.func_tool, "tools", None) or []
+            )
+        except Exception as exc:
+            self._diag(f"_remember_normal_toolset 失败: {exc!r}")
+
+    def _append_request_hint(self, req: ProviderRequest, text: str) -> None:
+        if TextPart is None or not text:
+            return
+        try:
+            parts = list(getattr(req, "extra_user_content_parts", None) or [])
+            parts.append(TextPart(text=text))
+            req.extra_user_content_parts = parts
+        except Exception as exc:
+            self._diag(f"_append_request_hint 失败: {exc!r}")
+
+    async def _apply_phone_toolset_to_request(self, event: AstrMessageEvent) -> bool:
+        """Agent 在普通聊天里调用 mumu_phone_play 后，把当前请求工具组切成手机工具。"""
+        umo = getattr(event, "unified_msg_origin", "") or ""
+        req = self._active_reqs.get(umo)
+        if req is None:
+            return False
+        self._snapshot_request(umo, req)
+        self._remember_normal_toolset(umo, req)
+        try:
+            await self._slim_for_vm_mode(req)
+        except Exception as exc:
+            self._diag(f"_apply_phone_toolset_to_request 失败: {exc!r}")
+            return False
+        self._append_request_hint(
+            req,
+            "[手机模式已开启（同一轮回答）] 工具组已切换为完整手机工具，可以直接截图/点击/滑动/输入/看多帧/录屏。"
+            "操作完必须调用 `mumu_phone_exit` 收手；退出后普通工具会自动恢复，你可以在同一轮回答里继续完成用户原本的任务，不要提前结束回答。",
+        )
+        self._diag(
+            f"同一轮回答内切换手机工具组 umo={umo} "
+            f"tools={len(req.func_tool.tools) if req.func_tool else 0}"
+        )
+        return True
+
+    def _restore_normal_toolset(self, event=None, umo: str = "", hint: bool = True) -> bool:
+        """收手后把当前请求工具组换回普通工具，并恢复进入前的系统提示/上下文。"""
+        umo = umo or (getattr(event, "unified_msg_origin", "") if event else "") or ""
+        req = self._active_reqs.get(umo)
+        snapshot = self._req_snapshots.pop(umo, None)
+        if req is None:
+            return False
+        try:
+            normal_tools = snapshot.get("normal_tools") if snapshot else None
+            if normal_tools is not None:
+                normal_set = ToolSet()
+                for tool in normal_tools:
+                    normal_set.add_tool(tool)
+                req.func_tool = normal_set if normal_set.tools else None
+            else:
+                req.func_tool = self._build_normal_tool_set()
+            if snapshot:
+                req.system_prompt = snapshot.get("system_prompt") or ""
+                req.contexts = list(snapshot.get("contexts") or [])
+                req.extra_user_content_parts = list(
+                    snapshot.get("extra_user_content_parts") or []
+                )
+            if hint:
+                self._append_request_hint(
+                    req,
+                    "[手机已收起] 已退出手机模式，普通工具已恢复。请在同一轮回答里继续完成用户原本的请求，不要因为收手而停止回答。",
+                )
+            self._diag(
+                f"同一轮回答内恢复普通工具组 umo={umo} "
+                f"tools={len(req.func_tool.tools) if req.func_tool else 0}"
+            )
+            return True
+        except Exception as exc:
+            self._diag(f"_restore_normal_toolset 失败: {exc!r}")
+            return False
+
+    def _restore_all_active_requests(self, hint: bool = True) -> None:
+        for umo in list(self._active_reqs.keys()):
+            try:
+                self._restore_normal_toolset(umo=umo, hint=hint)
+            except Exception as exc:
+                self._diag(f"_restore_all_active_requests 失败 umo={umo}: {exc!r}")
+
     # ------------------------------------------------------------------ Agent 回合开始/结束
     @filter.on_agent_begin()
     async def on_agent_begin(self, event: AstrMessageEvent, run_context=None) -> None:
@@ -1182,6 +1325,10 @@ class MumuVmPlugin(Star):
     async def on_agent_done(self, event: AstrMessageEvent, run_context, response) -> None:
         if not self._is_current():
             return
+        umo = getattr(event, "unified_msg_origin", "") or ""
+        if umo:
+            self._active_reqs.pop(umo, None)
+            self._req_snapshots.pop(umo, None)
         self._agent_busy = False
         if not self.state.active:
             return
@@ -1569,19 +1716,21 @@ class MumuVmPlugin(Star):
         event: AstrMessageEvent,
         goal: str = "",
         minutes: float = 0,
-        auto_play: bool = True,
+        auto_play: bool = False,
         notify: bool = True,
     ) -> str:
-        """进入"玩手机"模式：启动隐藏的 MuMu 模拟器，把手机交给 Agent 操作。
+        """由你自行决定进入"玩手机"模式（不再依赖用户关键词自动触发）。
 
-        普通聊天里只有这个工具能开启手机。进入后本回合之后的请求会切换到手机工具集。
-        如果 auto_play=true（默认），会立刻开始后台自主玩手机（不需要再等下一轮请求）。
+        当你判断用户需要你操作手机（例如"去玩手机 / 打开某 App / 看看某页面 / 刷视频"）时调用。
+        默认 auto_play=false：进入后**当前这一轮的工具组会立刻切换成完整手机工具**，
+        你可以继续截图/点击/滑动/输入/看多帧，在同一轮回答里完成手机任务；
+        操作完调用 mumu_phone_exit，收手后普通工具会自动恢复，你可以在同一轮回答里继续做其它任务。
 
         Args:
             goal(string): 这次玩手机的目标/任务，例如"刷一会儿B站""打开微信看看消息"
             minutes(number): 计划玩多少分钟，0 表示用配置的默认值
-            auto_play(boolean): 是否自动开始后台自主玩手机，默认 true
-            notify(boolean): 是否给用户发一条"我去玩手机了"，默认 true
+            auto_play(boolean): true=交给后台自主玩模式（本轮不亲自操作手机）；默认 false=本轮自己操作
+            notify(boolean): auto_play=true 时是否给用户发一条"我去玩手机了"
         """
         if not self._enabled:
             return "插件已禁用。"
@@ -1590,22 +1739,17 @@ class MumuVmPlugin(Star):
                 f"手机模式已经是开启状态（目标：{util.truncate(self.state.goal, 80)}，"
                 f"剩余：{self.state.remaining_text()}）。直接开始操作即可。"
             )
-        # was_active=False 说明当前这次请求组装时还不是手机模式，工具集里没有完整手机工具，
-        # Agent 本回合没法自己操作手机，必须交给后台自主模式去玩，否则会卡住。
-        force_auto = not self.state.active and bool(self._cfg("autoplay_enable", True))
         minutes = float(minutes or self._cfg("mode_default_minutes", 30))
         goal = goal or "随便玩玩手机"
-        await self.begin_play_mode(
-            goal=goal, minutes=minutes, source="chat", auto_continue=auto_play or force_auto, prestart=False
-        )
-        if not self.phone.is_started:
-            asyncio.create_task(self._prestart_vm_bg(), name="mumu-vm-prestart")
-        start_autoplay = bool(auto_play or force_auto)
-        self._diag(
-            f"mumu_phone_play goal={util.truncate(goal, 60)!r} minutes={minutes:g} "
-            f"auto_play={bool(auto_play)} force_auto={force_auto}"
-        )
-        if start_autoplay:
+        if auto_play:
+            await self.begin_play_mode(
+                goal=goal, minutes=minutes, source="chat", auto_continue=True, prestart=False
+            )
+            if not self.phone.is_started:
+                asyncio.create_task(self._prestart_vm_bg(), name="mumu-vm-prestart")
+            self._diag(
+                f"mumu_phone_play goal={util.truncate(goal, 60)!r} minutes={minutes:g} auto_play=True"
+            )
             try:
                 await self.autoplay.start(
                     goal=goal, minutes=minutes, source="chat", notify=bool(notify)
@@ -1620,15 +1764,33 @@ class MumuVmPlugin(Star):
                     "已自动收起手机，请检查 Provider（需支持图片+工具调用）或配置。"
                 )
             return (
-                f"已进入手机模式并开始自主玩手机：目标 {goal!r}，{minutes:g} 分钟。\n"
-                "（当前回合工具集里没有完整手机工具，所以由后台自主模式接管操作；"
-                "期间 @我 的消息会转给我决定是否回复。）"
+                f"已进入手机模式并交给后台自主玩：目标 {goal!r}，{minutes:g} 分钟。\n"
+                "本轮不占用你的工具组，你可以先继续回答/做其它任务；"
+                "期间 @我 的消息会转给后台 Agent 决定是否回复。"
                 + self._pending_suffix()
+            )
+        await self.begin_play_mode(
+            goal=goal, minutes=minutes, source="chat", auto_continue=False, prestart=False
+        )
+        if not self.phone.is_started:
+            asyncio.create_task(self._prestart_vm_bg(), name="mumu-vm-prestart")
+        swapped = await self._apply_phone_toolset_to_request(event)
+        self._diag(
+            f"mumu_phone_play goal={util.truncate(goal, 60)!r} minutes={minutes:g} "
+            f"auto_play=False swapped={swapped}"
+        )
+        if swapped:
+            return (
+                f"已进入手机模式：目标 {goal!r}，{minutes:g} 分钟。\n"
+                "当前这一轮的工具组已切换为完整手机工具（截图/点击/滑动/输入/多帧/录屏等），"
+                "你可以直接开始操作手机，不需要等下一轮。\n"
+                "操作完成后调用 `mumu_phone_exit` 收手；收手后普通工具会自动恢复，"
+                "你可以在同一轮回答里继续完成用户原本的其它任务（不要提前结束回答）。"
             )
         return (
             f"已进入手机模式：目标 {goal!r}，{minutes:g} 分钟。\n"
-            "注意：本回合的工具集是在请求开始时确定的，如果现在工具列表里还没有手机工具，"
-            "请先结束本回合；下一轮会自动出现完整手机工具（期间 @我 会恢复后台自主玩）。"
+            "当前请求不是普通聊天上下文，无法就地切换工具组；请先结束本回合，"
+            "下一轮会自动出现完整手机工具。"
         )
 
     @filter.llm_tool(name="mumu_phone_autoplay")
@@ -2401,6 +2563,9 @@ class MumuVmPlugin(Star):
     ) -> str:
         """收起手机、退出玩手机模式（默认顺手关掉模拟器）。
 
+        收手后普通工具会自动恢复，你可以**在同一轮回答里继续完成用户原本的其它任务**，
+        不需要停掉当前回答或等下一轮。
+
         Args:
             stop_vm(boolean): 是否关闭 MuMu 模拟器，默认 true
             summary(string): 收尾说明（会写进长期记忆，不会直接发给用户）
@@ -2428,7 +2593,8 @@ class MumuVmPlugin(Star):
         )
         return (
             f"已收起手机、退出手机模式（本次约 {played:.1f} 分钟）。"
-            "本次操作总结已自动写入长期记忆（iris L2），不用再向用户复述过程；"
+            "普通工具组已恢复，请在同一轮回答里继续完成用户原本的请求，不要停掉这次回答。"
+            "本次操作总结已自动写入长期记忆（iris L2），不用向用户复述整段过程；"
             "如果用户问起，简短说一句结果即可。"
         )
 

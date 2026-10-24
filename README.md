@@ -25,6 +25,7 @@
 | 🧭 UI 树 | `mumu_phone_ui` 返回可点击/可输入元素（中心坐标 + flags），比截图找按钮准 |
 | 📱 App/系统 | 前台应用、已安装列表、搜索、启动、打开链接、强停、安装/卸载 APK、电量/网络/IP/亮度/音量/旋转/解锁/通知栏/任意 shell |
 | ✂️ 玩手机模式精简 | 普通聊天只注入 4 个轻量手机工具；进入手机模式后**只保留 25 个手机工具**（+ 可配置的 `send_message_to_user` 和记忆插件工具），并裁剪对话历史、附加内容与系统提示，保证速度 |
+| 🧰 同轮进出手机模式 | **由 Agent 自己判断后调用 `mumu_phone_play` 进入**（默认不再靠聊天关键词自动触发，避免误触）；进入后**当前这一轮**的工具组立即换成完整手机工具；调用 `mumu_phone_exit` 收手后，同一轮回答内自动换回普通工具，可以继续做其它任务，**不会中断本次回答** |
 | 📨 打扰拦截 | 玩手机时来消息：不回复正文，只自动回"正在玩手机"，并把消息入队 + 在后续工具结果/系统提示中通知 Agent，由 Agent 自己决定是否用 `mumu_phone_say` 回复 |
 | 🤖 自主玩手机 | 主 Agent 回合结束后可自动转入后台自主模式继续玩；也支持**空闲 N 分钟自动开始**、**指定时间定时开始**、每日次数/时长预算；到点/空闲/Agent 主动都能收手并关掉模拟器 |
 | 🧠 连续性 | `mumu_phone_diary` 记录每轮"玩到哪了"，跨轮次/跨回合保持上下文 |
@@ -53,7 +54,12 @@
 - "看看手机屏幕上现在显示什么"
 - "用手机搜一下 xxx，然后告诉我结果"
 
-命中 `enter_keywords` 后插件会在**调模型之前**进入手机模式：同步开机、隐藏窗口、给本次请求注入完整手机工具 + 手机操作提示；Agent 回合结束后默认自动转入后台自主模式继续玩（`continue_after_turn`）。
+是否进入手机模式由 **Agent 自己判断**：普通聊天里会注入 `mumu_phone_play` 等 4 个轻量手机工具，Agent 判断需要操作手机时调用进入。默认**不再用聊天关键词自动进入**（`natural_language_entry=false`，避免误触）。进入后：
+
+- **当前这一轮**的工具组立即切换为完整手机工具，可以直接截图/点击/操作手机，不需要等下一轮；
+- 操作完调用 `mumu_phone_exit` 收手，**同一轮回答内**工具组会自动恢复普通工具、系统提示与上下文，Agent 可以继续完成用户原本的其它任务，**不会中断本次回答**。
+
+如果仍想用关键词自动进入，把 `natural_language_entry` 打开并配置 `enter_keywords`（同步开机、隐藏窗口、给该请求注入完整手机工具；Agent 回合结束后按 `continue_after_turn` 可转后台自主玩）。
 
 ### 3.2 自主玩手机（空闲 / 定时 / 手动）
 
@@ -87,7 +93,7 @@
 | --- | --- |
 | `mumu_phone_status` | 模拟器/模式/今日预算/定时任务状态 |
 | `mumu_phone_recent` | 查看 Agent 最近在手机上做了什么（操作记录 + 日记/回合小结 + 统计，手机模式外也能用） |
-| `mumu_phone_play` | 进入手机模式（可自动开始自主玩） |
+| `mumu_phone_play` | **由 Agent 自行决定进入手机模式**；进入后本回合工具组立即切为完整手机工具；默认本轮直接操作（`auto_play=false`），`auto_play=true` 时交给后台自主玩 |
 | `mumu_phone_autoplay` | 自主玩：start/stop/status/schedule/list/cancel |
 | `mumu_phone_screen` | 单帧截图（region/max_width/delay/annotate） |
 | `mumu_phone_frames` | 连续采样多帧：`duration` / `count` / `fps` / `every` / `mode=frames\|sheet` / `max_images` / `per_image` / `cols` / `width` / `region` / `delay` / `dedupe` / `annotate`，一帧一张图时一次返回多张带时间戳图片 |
@@ -106,8 +112,8 @@
 | `mumu_phone_lesson` | 可选记录一条操作经验（遇到什么情况→该怎么做），收手时整理成《操作教程总结》单独写长期记忆 |
 | `mumu_phone_media_status` | 查看媒体辅助开关、录音后端、录制状态 |
 | `mumu_phone_record_start` / `mumu_phone_record_stop` | 后台录屏（期间可继续操作/截图）；stop 可抽帧交给视觉/全模态模型转述，`return_frames=true` 时也把关键帧作为图片返回 |
-| `mumu_phone_hear_start` / `mumu_phone_hear_stop` | 后台录音（默认抓扬声器 loopback，期间可继续操作）；stop 可 STT 转写、音频多模态模型描述 |
-| `mumu_phone_exit` | 收手退出（可关模拟器） |
+| `mumu_phone_hear_start` / `mumu_phone_hear_stop` | 后台录音（WASAPI 进程 loopback，只录 MuMu 进程声音，期间可继续操作）；stop 可 STT 转写、音频多模态模型描述 |
+| `mumu_phone_exit` | 收手退出（可关模拟器）；同一轮回答内自动恢复普通工具组，可继续做其它任务 |
 
 ## 5. 关键配置（全部在 WebUI 插件配置里）
 
@@ -130,15 +136,17 @@
 | `media_record_max_sec` / `media_video_frames` / `media_video_frame_width` | 120 / 6 / 768 | 单次录制最长秒数 / 录屏转述抽帧数 / 帧宽度 |
 | `media_video_bit_rate` / `media_keep_files` | 8000000 / false | 录屏码率 / 转述后是否保留媒体文件 |
 | `burst_max_frames` | 20 | 多帧上限 |
-| `mode_default_minutes` | 30 | 自然语言进入后的时长 |
+| `mode_default_minutes` | 30 | Agent 调用 `mumu_phone_play` 进入后的默认时长 |
+| `natural_language_entry` / `enter_keywords` | false / 见 schema | 是否允许聊天关键词自动进入手机模式（**默认关**：由 Agent 判断后调用 `mumu_phone_play`，避免误触；打开后才使用 `enter_keywords`） |
+| `expose_compact_tools_in_normal_mode` | true | 普通聊天是否注入 4 个轻量手机工具（含 `mumu_phone_play`，Agent 据此自行决定进入） |
 | `mode_idle_timeout_sec` | 180 | 手机模式空闲多久自动收手 |
 | `continue_after_turn` | true | 主 Agent 回合结束后自动转后台自主玩 |
 | `interrupt_hint_text` / `interrupt_hint_cooldown_sec` | 正在玩手机，稍等～ / 60 | 打扰提示与冷却（只作用于 @/触发词消息） |
 | `summary_to_memory` / `summary_memory_sink` / `iris_memory_tool_name` | true / iris_l2 / save_memory | 收尾总结写入长期记忆（默认 iris L2，不发聊天）；默认不截断，可用 `summary_max_chars` 限制 |
 | `lesson_note_enable` / `lesson_memory_sink` / `lesson_memory_tags` | true / iris_l2 / 玩手机,教程,经验,操作技巧 | Agent 可选的《操作教程总结》：记了才写，单独一条长期记忆 |
 | `notify_on_finish` / `finish_notify_text` | false / 手机收起来了。 | 收手时是否额外发一句短提示 |
-| `enter_keywords` / `stop_keywords` | 见 schema | 自然语言进入/收手关键词（逗号分隔） |
-| `enter_require_admin` | true | 只允许管理员/私聊触发"去玩手机"，避免群友误触 |
+| `enter_keywords` / `stop_keywords` | 见 schema | 关键词（`enter_keywords` 仅在 `natural_language_entry=true` 时生效；`stop_keywords` 用于玩手机时用户喊停） |
+| `enter_require_admin` | true | 关键词自动进入时只允许管理员/私聊触发（改为 Agent 工具进入后此限制不再拦工具调用） |
 | `interrupt_all_sessions` | false | 玩手机时是否拦截所有会话；默认只拦管理员/私聊/当前会话，群聊其他消息正常走 LLM |
 | `slim_trim_contexts` / `slim_context_keep_messages` | true / 8 | 手机模式裁剪历史 |
 | `slim_extra_content_parts` | true | 手机模式丢弃每轮附加系统提醒 |
@@ -251,6 +259,11 @@ astrbot_plugin_mumu_vm/
 
 ## 11. 版本
 
+- v1.5.0（2026-10-24）
+  - 手机模式改为 **由 Agent 判断后调用 `mumu_phone_play` 进入**：默认关闭聊天关键词自动进入（`natural_language_entry=false`），不再"说句话就误开机"；普通聊天仍注入 4 个轻量手机工具供 Agent 决策。
+  - 进入手机模式后，**当前这一轮的工具组立即切换**为完整手机工具，Agent 同一轮就能截图/点击/操作，不需要等下一轮。
+  - 调用 `mumu_phone_exit` 收手后，同一轮回答内自动**恢复普通工具组/系统提示/上下文**（兼容 lazy-tools 等插件过滤），Agent 可以继续完成用户原本的其它任务，**不中断本次回答**。
+  - `mumu_phone_play` 的 `auto_play` 默认改为 `false`（本轮自己操作）；需要后台自主玩时显式传 `auto_play=true`。
 - v1.4.1（2026-10-23）
   - 录音从"抓 Windows 默认扬声器"改为 **WASAPI 进程 loopback，只抓 MuMu 进程声音**（capturekit，可选安装），不再把其它应用的声音录进去。
   - 实测 **MuMu 隐藏窗口时会静音**；录音时自动把 MuMu 窗口移到屏幕外再 show（用户不可见）恢复音频渲染，录完恢复隐藏——只采集 MuMu 进程，宿主其它声音实测不会进入录音。

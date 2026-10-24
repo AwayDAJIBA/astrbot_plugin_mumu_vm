@@ -201,12 +201,12 @@
   },
   "natural_language_entry": {
     "type": "bool",
-    "description": "允许用自然语言（如“去玩手机”“看看手机”）直接进入手机模式",
-    "default": true
+    "description": "允许聊天关键词自动进入手机模式（默认关：改为由 Agent 判断后调用 mumu_phone_play 工具进入，避免误触）",
+    "default": false
   },
   "enter_keywords": {
     "type": "string",
-    "description": "进入手机模式的关键词，逗号分隔",
+    "description": "仅 natural_language_entry=true 时生效：聊天里出现这些词会自动进入手机模式（默认关）",
     "default": "玩手机,操作手机,用手机,打开手机,看看手机,看下手机,看手机,手机看看,打开模拟器,操作模拟器,用模拟器,安卓虚拟机,去刷手机,帮我玩手机"
   },
   "enter_require_admin": {
