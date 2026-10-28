@@ -1,17 +1,19 @@
-# astrbot_plugin_mumu_vm · MuMu 安卓虚拟机（Agent 手机）
+# astrbot_plugin_mumu_vm · 给 AI 一台安卓手机
 
-> ⚠️ **AI 生成声明**：本项目的代码、文档与提示词主要由**大模型（DeepSeek Harness 中的 AI Agent）生成**，维护者已做审阅与实测；本项目按“现状”提供，使用前请自行评估风险（详见 [声明与隐私](#10-开源声明--隐私与-ai-生成)）。
->
-> 仓库地址：<https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm>
+![10 秒演示：Agent 自己打开设置、点击搜索、输入“电池”并点进结果](assets/demo.gif)
 
-> 让 AstrBot 的 Agent **独占操控一台安卓手机**：MuMu 模拟器里的画面只给 Agent 看（窗口隐藏在桌面之外），
-> 支持单帧截图 / **连续采样多帧（一次返回多张带时间戳的图）** 看懂动态画面、UI 树精确点击、中文输入、App 与系统控制；
-> 进入"玩手机"模式后自动**精简工具与上下文**提速；被打扰时只回"正在玩手机"并把消息交给 Agent 决定是否回复；
-> 支持**空闲/定时自主玩手机**、每日预算、随时收手。
+- **是什么**：一个 AstrBot 插件，让 AI Agent 独占操控一台运行在 MuMu 模拟器里的安卓手机——它自己看屏幕、点按钮、打字，像一个真人一样用手机。
+- **能干什么**：Agent 可以开 App、刷视频、截图/连续多帧看动态画面、打字评论、空闲或定时自主玩；收手后继续普通对话，还能把使用记录和操作技巧存进本地记忆做语义检索。
+- **怎么装**：把本仓库（或 Release 里的 zip）放进 AstrBot 的 `data/plugins/`，装好 MuMu 模拟器与（可选）ffmpeg；录音需要 `pip install capturekit`，然后在 WebUI 重载插件即可。
 
-适用：Windows + MuMu 模拟器（MuMu NX / MuMu 12 系列，`MuMuManager.exe` 可用）+ AstrBot 4.27 ~ 4.29。
+适用：Windows + MuMu NX / MuMu 12（`MuMuManager.exe` 可用）+ AstrBot 4.27 ~ 4.29。
+[![GitHub release](https://img.shields.io/github/v/release/AwayDAJIBA/astrbot_plugin_mumu_vm?label=release)](https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
+[![AstrBot](https://img.shields.io/badge/AstrBot-4.27%2B-6f42c1)](https://astrbot.app)
+更多：[功能一览](#1-功能一览) · [安装](#2-安装) · [更新日志](CHANGELOG.md) · [Release 下载 zip](https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm/releases)
 
 ---
+
 
 ## 1. 功能一览
 
@@ -255,7 +257,6 @@ astrbot_plugin_mumu_vm/
 
 ## 10. 开源声明 / 隐私与 AI 生成
 
-- **AI 生成声明**：本项目的源码、README 与提示词主要由大模型（DeepSeek Harness 中的 AI Agent）生成，维护者进行了审阅、修改与实机测试；代码按“现状”提供，不保证无缺陷，请在使用前自行审查，风险自负。
 - **不含个人隐私**：仓库内**不包含**任何 QQ 号/账号 ID、个人昵称、聊天记录、记忆库、人格设定、API Key、Token、本地绝对路径或运行状态文件。插件运行时的数据（`state.json`、`diag.log`、日记、截图、本地 memory 留档）都写在 AstrBot 的 `data/` 目录下，不会进入本仓库。
 - **配置默认值是通用占位**：如 `phone_persona_prompt` 默认为空（回退 AstrBot 当前会话人格）、`autoplay_goals` 为通用示例；请按自己的需要修改，勿把私人信息提交到公开仓库。
 - **第三方组件**：
@@ -270,89 +271,17 @@ astrbot_plugin_mumu_vm/
 - 为降低接口变动/许可依赖，v1.6.0 增加 **`iris_compat_enable`**：关闭后插件完全不再调用 Iris（不注入、不写 L2、不暴露其工具），改用插件自带本地记忆；Iris 开着时本地记忆也会额外存一份，可随时切换。
 - 本插件自身仍按仓库 [LICENSE](./LICENSE)（MIT）发布。
 
-## 11. 版本
+## 11. 版本与更新日志
 
-- v1.6.0（2026-10-24）
-  - 新增 **`iris_compat_enable`** 兼容开关：关闭后完全不再调用/注入 Iris，改用插件自带本地记忆；Iris 开着时也会额外保存一份到本地。
-  - 新增**插件自带本地长期记忆**：收手总结（使用记录）与 `mumu_phone_lesson`（操作技巧）自动保存到 `local_memory/memory.json`；可用 Embedding Provider 做**语义检索**，没有 Embedding 时自动退化为关键词/字符 bigram 检索。
-  - 新增工具 **`mumu_phone_memory`**（`search` / `recent` / `add`），手机模式/自主玩时 Agent 可主动检索以前的经验；玩手机/自主玩提示词会按相关度注入少量本地记忆背景（Iris 关闭或 Iris 无结果时生效）。
-  - 新增配置：`iris_compat_enable`、`local_memory_enable`、`local_memory_embedding_provider_id`、`local_memory_max_entries`、`local_memory_context_enable/top_k/max_chars/ttl_sec`。
-  - 手机工具数 25 → 26（新增 `mumu_phone_memory`）。
+完整历史见 [CHANGELOG.md](./CHANGELOG.md)，发布包见 [GitHub Releases](https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm/releases)。
 
-- v1.5.0（2026-10-24）
-  - 手机模式改为 **由 Agent 判断后调用 `mumu_phone_play` 进入**：默认关闭聊天关键词自动进入（`natural_language_entry=false`），不再"说句话就误开机"；普通聊天仍注入 4 个轻量手机工具供 Agent 决策。
-  - 进入手机模式后，**当前这一轮的工具组立即切换**为完整手机工具，Agent 同一轮就能截图/点击/操作，不需要等下一轮。
-  - 调用 `mumu_phone_exit` 收手后，同一轮回答内自动**恢复普通工具组/系统提示/上下文**（兼容 lazy-tools 等插件过滤），Agent 可以继续完成用户原本的其它任务，**不中断本次回答**。
-  - `mumu_phone_play` 的 `auto_play` 默认改为 `false`（本轮自己操作）；需要后台自主玩时显式传 `auto_play=true`。
-- v1.4.1（2026-10-23）
-  - 录音从"抓 Windows 默认扬声器"改为 **WASAPI 进程 loopback，只抓 MuMu 进程声音**（capturekit，可选安装），不再把其它应用的声音录进去。
-  - 实测 **MuMu 隐藏窗口时会静音**；录音时自动把 MuMu 窗口移到屏幕外再 show（用户不可见）恢复音频渲染，录完恢复隐藏——只采集 MuMu 进程，宿主其它声音实测不会进入录音。
-  - 新增 **原版 AstrBot 沙盒测试结论**：原版音频 HTTP 能上传但 `completion_text` 可能为空（内容在 reasoning_content），原生视频无输入；插件新增**直连 Provider HTTP 兜底**（音频/图片，不改 AstrBot 核心），视频继续用抽帧→图片。
-  - 音频模型 Provider 配置建议显式指定（如 `xiaomi/mimo-v2.6-pro`），避免自动选到不支持音频输入的模型。
-- v1.4.0（2026-10-23）
-  - **媒体辅助（可选，三个开关可同时开启）**：
-    - 录屏：`mumu_phone_record_start/stop` 后台 `screenrecord`，录制期间仍可点击/滑动/截图/多帧采样；停止后抽帧交给视觉/全模态模型转述画面（`omni_assist_enable`）。
-    - 录音：`mumu_phone_hear_start/stop` 后台抓 Windows 默认扬声器 loopback（soundcard）或 ffmpeg dshow；停止后可 STT 转写（`stt_assist_enable`）和/或音频多模态模型描述（`audio_llm_assist_enable`）。
-    - 录制期间自动更新空闲计时，不会因"空闲自动收手"中断；录屏与截图并发时多帧自动降级为连续截图，避免抢 screenrecord。
-    - 新增 `mumu_phone_media_status` 工具；媒体文件默认用完即删。
-  - 新增 14 项配置（`media_assist_enable` / 三个能力开关 / Provider 指定 / 录音后端 / 时长/帧数/码率/保留文件）。
-  - 推荐的音频 Provider 示例：`xiaomi/mimo-v2.6-pro`；若自动选择后模型说收不到音频，请显式指定。
-- v1.3.3（2026-10-22）
-  - **符合 AstrBot 插件审核的调整**：移除插件自动修改系统配置/自启动项、以及后台定时清理 MuMu 进程的行为——插件不再碰注册表、不修改 Windows 服务启动类型、不在空闲时轮询系统进程。
-  - 保留可选项 `close_mumu_app_on_exit`（默认开）：手机使用结束后关闭本次使用后残留的 MuMu 主程序/后台进程；关掉则完全手动收尾。
-  - 系统级优化（MuMu 自启动项、`MuMuRemoteService` 服务）改为**手动操作**，README 提供命令；插件只负责手机模式内的按需启动/关闭与状态展示。
-- v1.3.2（2026-10-22，已被 v1.3.3 取代）
-  - 该版本引入的"自动移除自启动/空闲清理后台进程"已在 v1.3.3 移除；仅保留可选的"使用结束后关闭 MuMu 主程序"。
-- v1.3.1（2026-10-20）
-  - 采纳 AstrBot 插件审核的非阻断建议：
-    - 新增 **缓存友好模式** `vm_mode_cache_friendly`（默认关）：手机模式改为**追加**注入、不裁剪历史/附加内容、手机提示块保持稳定（不把剩余时间/待处理消息塞进 system prompt），以提升模型前缀缓存命中；代价是 token 增加。默认仍保持精简提速模式。
-    - `mumu_phone_shell` 默认**仅管理员/私聊/所有者**可用（新增 `shell_tool_require_admin`，默认 true）；README 补充测试账号/每日预算的安全建议。
-    - 合成事件（自主玩/记忆写入）标记为管理员身份，保证需要权限的工具在后台也能正常工作。
-- v1.3.0（2026-10-20）
-  - **开源发布**：去除个人默认配置与示例内容（示例人格卡、个人称呼、个人 ffmpeg 路径等），默认值为通用占位，不影响已有配置。
-  - 增加 AI 生成声明、隐私说明、`NOTICE.md`、`MIT LICENSE`、`.gitignore`。
-- v1.2.2（2026-10-20）
-  - **手机操作总结写入 iris L2 时不再截断**：去掉 500 字总量上限和每条 120 字上限；新增 `summary_max_chars`（默认 0=不截断，想限制再填）；日记也按原文保存。
-  - **新增可选《操作教程总结》**：Agent 玩手机时可调用 `mumu_phone_lesson(situation, action)` 记经验（遇到什么情况→该怎么做）；收手时如果记过，会**单独作为一条记忆**写入 iris L2（标签可配 `lesson_memory_tags`），本地留档 `memory/lessons.md`；不调用就不写。
-  - 新增 `lesson_note_enable`（是否提供该工具）、`lesson_memory_sink`（iris_l2/local/none）、`lesson_memory_tags`；自主玩提示词也提示了这个可选项。
-- v1.2.1（2026-10-20）
-  - **修复半夜自动玩手机时往聊天里发提示**：定时/空闲自动开始默认不再发"我去玩手机了"（`autoplay_notify_on_start` 默认 false）；定时/空闲自动结束默认也不发"手机收起来了"（`autoplay_notify_on_finish` 默认 false）；自动会话出错默认静默（`autoplay_notify_on_error` 默认 false，只写日志/diag）。用户主动喊它玩手机时的提示不受影响。
-  - 自动会话结束后重置空闲计时（下一局要再等 `autoplay_idle_minutes`），避免半夜一局接一局连续刷；提示文案也改成与实际规则一致（只有 @/触发词消息才会收到"正在玩手机"）。
-- v1.2.0（2026-10-19）
-  - iris 注入可配置：`phone_iris_inject_query`（检索语句模板，支持 `{owner}` / `{goal}` 占位）+ `phone_iris_inject_keywords`（追加检索关键词，逗号分隔），不再写死查询。
-  - 手机模式/自主玩额外暴露记忆插件工具：`phone_iris_tools_enable`（默认开）+ `phone_iris_tool_names`（默认 `search_memory,get_profile,save_memory`），Agent 可临时查画像/记忆、补记忆。
-  - 新增工具 **`mumu_phone_recent`**：查看 Agent 最近在手机上做了什么（操作记录 + 日记/回合小结 + 统计，手机模式外也能用）；所有手机操作现在都会记录到 `state.json` 的 activity 里（保留最近 200 条）。
-  - `mumu_phone_status(show_prompt=true)` 会显示当前手机模式额外暴露的记忆工具列表；`diag.log` 会记录 iris 检索语句。
-- v1.1.2（2026-10-19）
-  - **修复普通群聊消息仍会收到"正在玩手机"提示**：AstrBot 的 `event.is_wake` 会被"注册了全量消息监听的插件"（包括本插件自己的 `on_any_message`）在 WakingStage 里置为 True，导致群聊普通消息也变成 `is_wake=True`。改为只认 `event.is_at_or_wake_command`（真正的 @ / 唤醒词 / 私聊 / 引用回复），普通群聊消息不再提示、不入队、不打断手机模式。
-  - 手机模式中忽略非唤醒消息时会写一行 `diag.log`（`忽略非唤醒消息 ... is_at_or_wake=... is_wake=...`），便于确认。
-- v1.1.1（2026-10-19）
-  - **手机模式兼容 iris 少量背景注入**：玩手机/自主玩时从 iris 取「用户画像摘要 + 最近 3 条相关记忆」，压成 ≤600 字的一小段（默认 `phone_iris_context_max_chars=600`，缓存 10 分钟），让 Agent 评论时知道用户是谁、最近在干嘛，又不搬大段记忆。
-  - 新增 `phone_iris_context_enable` / `phone_iris_profile_enable` / `phone_iris_memory_enable` / `phone_iris_memory_top_k` / `phone_iris_context_max_chars` / `phone_iris_context_ttl_sec` 配置；iris 未安装或不可用时自动跳过，不影响手机模式。
-  - 新增 `phone_comment_guard`（默认开）：提示词里加入"评论只围绕当前内容、不要写无关个人近况/聊天内容/隐私、不要提 AI/记忆/资料"的规则，自主玩提示词同步。
-  - 提示词注入日志增加 `iris=N字`；`mumu_phone_status(show_prompt=true)` 可预览包含 iris 背景后的完整手机模式提示词。
-- v1.1.0（2026-10-19）
-  - **连续采样重做**：`mumu_phone_frames` 改由 Agent 自由指定采样参数——`duration` 采样时长、`count` 总帧数、`fps` 每秒帧数、`every` 每几秒一帧、`mode=frames`（一帧一张图，默认）/`sheet`（拼图版）、`max_images` 最多几张图、`per_image` 每张图几帧、`cols`/`width`、`region` 裁剪、`delay` 等待。
-  - **一次返回多张图片**：一帧一张图（按时间顺序、每帧带时间戳标签），一张图承载不够就自动/按参数继续输出下一张；不再硬塞进一张拼图。
-  - 密集采样走 screenrecord+ffmpeg 抽帧，稀疏采样直接连续 screencap；时间轴和每张图的帧编号/时间会在工具结果里列出。
-  - 新增配置：`frames_max_duration_sec` / `frames_max_count` / `frames_max_images` / `frames_image_width` / `frames_sheet_tile_width`。
-- v1.0.4（2026-10-19）
-  - 手机模式**整体替换系统提示词**：不再直接使用 AstrBot 的长系统提示（技能/工具说明/插件提醒等），改为「单独人格提示词 + 手机操作规则」。
-  - 新增 `phone_persona_prompt`（单独人格，推荐自己写一份精简角色设定）、`phone_persona_fallback_astrbot`（留空时是否回退会话人格）、`vm_mode_replace_system_prompt`（替换/追加）。
-  - 自主玩手机也改用同一份单独人格提示词。
-  - `mumu_phone_status(show_prompt=true)` 可预览手机模式实际使用的系统提示词（模式/人格来源/长度/开头）。
-- v1.0.3（2026-10-19）
-  - **自主玩手机也注入人格提示词**（新增 `autoplay_use_persona`，默认开；从 owner 会话解析当前生效 persona 后拼进 autoplay 的 system prompt）。
-  - `mumu_phone_status` 会显示当前解析到的人格名/字数；`diag.log` 增加 `persona_in_prompt` / `autoplay 人格注入 persona=... chars=...` 便于核对。
-  - 主 Agent 的手机模式请求原本就由 AstrBot 原生注入人格，插件只追加手机操作块、不删除人格段（`slim_system_prompt_max_chars=0` 时不截断）。
-- v1.0.2（2026-10-19）
-  - `mumu_phone_play` 在"当前回合没有完整手机工具"时会**强制启动后台自主玩**，不再出现"模式开了但没人操作/退不出去"的卡死。
-  - 手机模式下收到 @/触发词消息且后台没在玩时，会自动恢复自主玩，让 Agent 真正处理这条消息（并决定回不回）。
-  - 增加 `on_agent_begin/on_agent_done` 忙碌标记，避免自主玩和主 Agent 回合同时操作手机。
-- v1.0.1（2026-10-19）
-  - 打扰拦截改为只处理 @/触发词消息；群聊普通消息不再提示、不入队、不打断。
-  - 自主玩手机工具集补上 `mumu_phone_exit`，Agent 想收手时能真正退出（含工具循环内安全退出）。
-  - 操作总结不再发聊天，改为调用 iris `save_memory` 写入 L2（失败回退本地文件）。
-  - 手机模式提示词加强（明确收手规则、总结不刷屏），并把注入情况写进 `diag.log` 便于确认。
-- v1.0.0（2026-10-19）
-- AstrBot 4.27.3 ~ 4.29.x；实测环境 AstrBot 4.29.1 + MuMu NX 6.8.7（Android 15）+ Windows 10/11。
+- **v1.6.1**（2026-10-28）：README 首屏重做 + 10 秒演示 GIF + Release 插件 zip + GitHub topics。
+- **v1.6.0**（2026-10-24）：可关闭 iris 兼容 + 插件自带本地语义记忆（使用记录 / 操作技巧）。
+- **v1.5.0**（2026-10-24）：Agent 自行判断进入手机模式 + 同一轮回答内恢复普通工具组。
+- 更早版本与完整细节见 [CHANGELOG.md](./CHANGELOG.md)。
+
+**环境**：Windows + MuMu NX / MuMu 12 + AstrBot 4.27 ~ 4.29；实测 MuMu NX 6.8.7（Android 15）+ AstrBot 4.29.1。
+
+## AI 生成声明
+
+本项目的代码、文档与提示词主要由**大模型（DeepSeek Harness 中的 AI Agent）生成**，维护者进行了审阅、修改与实机测试；演示由脚本驱动 MuMu 实机录制。代码按“现状”（AS IS）提供，不提供任何明示或暗示的保证；使用前请自行审查代码/配置，并自行承担 AI 操作真实 App/账号带来的风险。详见 [NOTICE.md](./NOTICE.md)。

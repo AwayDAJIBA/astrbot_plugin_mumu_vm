@@ -41,12 +41,8 @@ from .vm import util
 
 PLUGIN_NAME = "astrbot_plugin_mumu_vm"
 AUTHOR = "AwayDAJIBA"
-DESC = (
-    "让 Agent 独占操控 MuMu 模拟器里的安卓手机（窗口隐藏、单帧截图/连续采样多帧看图、"
-    "UI 点击、中文输入、应用/系统控制、玩手机模式精简提速、被打扰时只回“正在玩手机”、"
-    "空闲/定时自主玩手机与随时收手）。"
-)
-VERSION = "v1.6.0"
+DESC = "让 AI 独占操控一台安卓手机：自己截图、点击、打字"
+VERSION = "v1.6.1"
 
 # 精简模式（普通聊天）下暴露的工具：让 Agent 知道有手机可用，又不占太多上下文
 COMPACT_TOOLS = {
