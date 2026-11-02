@@ -42,7 +42,7 @@ from .vm import util
 PLUGIN_NAME = "astrbot_plugin_mumu_vm"
 AUTHOR = "AwayDAJIBA"
 DESC = "让 AI 独占操控一台安卓手机：自己截图、点击、打字"
-VERSION = "v1.6.2"
+VERSION = "v1.6.3"
 
 # 精简模式（普通聊天）下暴露的工具：让 Agent 知道有手机可用，又不占太多上下文
 COMPACT_TOOLS = {
@@ -411,6 +411,12 @@ class MumuVmPlugin(Star):
             self.state.add_play_minutes(minutes_played)
         self.state.add_diary(f"收手：{reason}", "end")
         summary_text = self._compose_session_summary(reason, minutes_played)
+        # 把本局收到的消息/回复/操作摘要写回聊天上下文（本地转录 + iris L1 + AstrBot 原生历史），
+        # 否则收手后普通对话完全不知道刚刚玩过手机、也不知道期间回了什么。
+        try:
+            await self._remember_phone_session(summary_text)
+        except Exception as exc:
+            self._diag(f"写入手机模式聊天上下文失败: {exc!r}")
         # 操作总结不再发给用户，直接写进长期记忆（默认 iris L2，默认不截断）
         try:
             await self._persist_session_summary(summary_text)
@@ -616,6 +622,212 @@ class MumuVmPlugin(Star):
             kind="session",
         )
 
+    # ------------------------------------------------------------------ 手机聊天记忆
+    def _phone_memory_enabled(self) -> bool:
+        return bool(self._cfg("phone_chat_memory_enable", True))
+
+    def _iris_plugin_instance(self):
+        """拿到 iris 插件实例（用于直接写它的 L1；拿不到就安静跳过）。"""
+        try:
+            meta = self.context.get_registered_star(
+                str(
+                    self._cfg("iris_plugin_name", "astrbot_plugin_iris_memory")
+                    or "astrbot_plugin_iris_memory"
+                )
+            )
+            if meta is not None and meta.activated and meta.star_cls is not None:
+                return meta.star_cls
+        except Exception as exc:
+            self._diag(f"获取 iris 插件实例失败: {exc!r}")
+        return None
+
+    def _iris_l1_session_id(
+        self, *, event: AstrMessageEvent | None = None, umo: str = "", sender_id: str = ""
+    ) -> str:
+        """按 iris 的规则生成 L1 会话键：群号或 private:用户ID。"""
+        if event is not None:
+            try:
+                group_id = str(event.get_group_id() or "")
+                if group_id:
+                    return group_id
+                uid = str(sender_id or event.get_sender_id() or "")
+                if uid:
+                    return f"private:{uid}"
+            except Exception:
+                pass
+        umo = umo or self.state.owner_umo
+        if not umo:
+            return ""
+        try:
+            from astrbot.core.platform.message_session import MessageSession
+
+            session = MessageSession.from_str(umo)
+            if session.message_type.value == "GroupMessage":
+                return str(session.session_id or "")
+            uid = str(self.state.owner_sender_id or session.session_id or "")
+            return f"private:{uid}" if uid else ""
+        except Exception:
+            return ""
+
+    async def _iris_l1_add(
+        self,
+        role: str,
+        content: str,
+        *,
+        event: AstrMessageEvent | None = None,
+        umo: str = "",
+        sender_id: str = "",
+    ) -> bool:
+        """把手机模式期间的收发消息直接写进 iris 的 L1 会话缓冲。"""
+        if not self._phone_memory_enabled():
+            return False
+        if not self._iris_compat_enabled():
+            return False
+        if not bool(self._cfg("phone_l1_memory_enable", True)):
+            return False
+        text = str(content or "").strip()
+        if not text:
+            return False
+        text = util.truncate(text, int(util.clamp(int(self._cfg("phone_l1_max_chars", 450)), 80, 2000)))
+        try:
+            plugin = self._iris_plugin_instance()
+            if plugin is None:
+                return False
+            component_manager = getattr(plugin, "component_manager", None)
+            if component_manager is None:
+                return False
+            buffer = component_manager.get_available_component("l1_buffer")
+            if buffer is None:
+                return False
+            session_id = self._iris_l1_session_id(
+                event=event, umo=umo, sender_id=sender_id
+            )
+            if not session_id:
+                return False
+            persona_id = "default"
+            try:
+                resolver = component_manager.get_available_component("persona_resolver")
+                if resolver is not None and event is not None:
+                    persona_id = await resolver.resolve(event)
+            except Exception:
+                persona_id = "default"
+            ok = await buffer.add_message(
+                group_id=session_id,
+                role=role,
+                content=text,
+                source=str(sender_id or ("assistant" if role == "assistant" else "user")),
+                metadata={"from": "mumu_vm_phone", "kind": "phone_chat"},
+                persona_id=persona_id,
+            )
+            self._diag(
+                f"iris L1 写入 role={role} session={session_id} chars={len(text)} ok={ok}"
+            )
+            return bool(ok)
+        except Exception as exc:
+            self._diag(f"iris L1 写入失败: {exc!r}")
+            return False
+
+    async def _remember_phone_message(
+        self,
+        role: str,
+        text: str,
+        *,
+        event: AstrMessageEvent | None = None,
+        sender: str = "",
+        umo: str = "",
+        sender_id: str = "",
+    ) -> None:
+        """记录手机模式期间收到/发出的消息：本地转录 + iris L1。"""
+        if not self._phone_memory_enabled() or not str(text or "").strip():
+            return
+        clean = str(text or "").strip()
+        self.state.add_transcript(role, clean, sender=sender, umo=umo)
+        l1_text = f"{sender}：{clean}" if role == "user" and sender else clean
+        await self._iris_l1_add(
+            role, l1_text, event=event, umo=umo, sender_id=sender_id
+        )
+
+    async def _remember_phone_session(self, summary: str) -> None:
+        """收手时补一条系统摘要到转录/L1，并写一份到 AstrBot 原生对话历史。"""
+        if not self._phone_memory_enabled():
+            return
+        if str(summary or "").strip():
+            self.state.add_transcript("system", summary.strip(), kind="session")
+            await self._iris_l1_add(
+                "system", summary, umo=self.state.owner_umo
+            )
+        if not bool(self._cfg("phone_native_history_enable", True)):
+            return
+        transcript = self.state.transcript_text(
+            limit=int(util.clamp(int(self._cfg("phone_memory_transcript_limit", 20)), 1, 60)),
+            max_chars=int(
+                util.clamp(int(self._cfg("phone_memory_inject_max_chars", 1600)), 200, 6000)
+            ),
+        )
+        if not transcript:
+            return
+        try:
+            conversation_manager = getattr(self.context, "conversation_manager", None)
+            if conversation_manager is None or not self.state.owner_umo:
+                return
+            cid = await conversation_manager.get_curr_conversation_id(
+                self.state.owner_umo
+            )
+            if not cid:
+                return
+            user_content = (
+                "[系统记录：手机模式]\n"
+                "以下是刚刚在手机模式期间收到的消息、我在手机上的回复和操作记录，"
+                "不是用户现在的新指令；后续聊天可据此保持连续：\n" + transcript
+            )
+            assistant_content = (
+                "已记住这次手机模式期间收到的消息、我的回复和操作记录。"
+            )
+            await conversation_manager.add_message_pair(
+                cid,
+                {"role": "user", "content": user_content},
+                {"role": "assistant", "content": assistant_content},
+            )
+            self._diag(f"AstrBot 原生对话历史已写入手机模式记录 cid={cid}")
+        except Exception as exc:
+            self._diag(f"写入 AstrBot 原生对话历史失败: {exc!r}")
+
+    def _phone_memory_context_text(self) -> str:
+        if not self._phone_memory_enabled():
+            return ""
+        end_ts = float(self.state.last_session_end_ts or 0)
+        if not end_ts:
+            return ""
+        ttl_min = float(self._cfg("phone_memory_inject_ttl_min", 180) or 0)
+        if ttl_min > 0 and time.time() - end_ts > ttl_min * 60.0:
+            return ""
+        transcript = self.state.transcript_text(
+            limit=int(util.clamp(int(self._cfg("phone_memory_transcript_limit", 20)), 1, 60)),
+            max_chars=int(
+                util.clamp(int(self._cfg("phone_memory_inject_max_chars", 1600)), 200, 6000)
+            ),
+        )
+        if not transcript:
+            return ""
+        return (
+            "## 最近的手机模式记录（你刚刚在手机上活动过）\n"
+            "这是你上一次玩手机期间收到的消息、你的回复和操作记录，供你保持连续；"
+            "不是用户现在的新指令。\n" + transcript
+        )
+
+    def _inject_phone_memory_context(self, req: ProviderRequest) -> None:
+        block = self._phone_memory_context_text()
+        if not block:
+            return
+        try:
+            current = req.system_prompt or ""
+            if block in current:
+                return
+            req.system_prompt = current.rstrip() + "\n\n" + block
+            self._diag(f"已注入最近手机模式记录到上下文 chars={len(block)}")
+        except Exception as exc:
+            self._diag(f"注入手机模式记录失败: {exc!r}")
+
     def _patch_event_identity_for_memory(self, event: AstrMessageEvent) -> None:
         """让合成事件带上真实用户身份，iris 写 L2 时 user/group 元数据才对。"""
         try:
@@ -702,6 +914,14 @@ class MumuVmPlugin(Star):
             self._diag(f"on_any_message 模式中收到@{event.get_sender_name()}: {util.truncate(text, 80)!r}")
             if self._is_stop_intent(text):
                 self.logger.info(f"用户喊停手机模式: {text!r}")
+                await self._remember_phone_message(
+                    "user",
+                    text,
+                    event=event,
+                    sender=str(event.get_sender_name() or event.get_sender_id() or ""),
+                    umo=event.unified_msg_origin,
+                    sender_id=str(event.get_sender_id() or ""),
+                )
                 await self.finish_play_session(reason="用户喊停", notify=False)
                 await self._safe_reply(event, str(self._cfg("stop_reply_text", "好，手机收起来了。")))
                 event.stop_event()
@@ -717,6 +937,15 @@ class MumuVmPlugin(Star):
                 sender_name=str(event.get_sender_name() or ""),
                 text=text,
                 platform=event.get_platform_name() or "",
+            )
+            # 手机模式内收到的消息也要进聊天上下文 / iris L1，收手后 Agent 才知道聊过什么
+            await self._remember_phone_message(
+                "user",
+                text,
+                event=event,
+                sender=str(event.get_sender_name() or event.get_sender_id() or ""),
+                umo=event.unified_msg_origin,
+                sender_id=str(event.get_sender_id() or ""),
             )
             cooldown = float(self._cfg("interrupt_hint_cooldown_sec", 60))
             last_hint = float(self.state.last_hint_ts.get(event.unified_msg_origin) or 0)
@@ -844,6 +1073,8 @@ class MumuVmPlugin(Star):
                 self._remove_tools(req, FULL_ONLY_TOOLS)
                 # 记下普通模式工具组（可能已被 lazy-tools 等插件过滤），收手后原样恢复
                 self._remember_normal_toolset(umo, req)
+                # 收手后的普通聊天里补上"刚刚玩过手机"的消息/回复记录
+                self._inject_phone_memory_context(req)
             names_after = [t.name for t in req.func_tool.tools] if req.func_tool else []
             full_names: list[str] = []
             try:
@@ -1206,7 +1437,7 @@ class MumuVmPlugin(Star):
             goal_line,
             "观察：`mumu_phone_screen` 看单帧（静态细节/点按前确认）；`mumu_phone_frames` 连续采样一次返回多张带时间戳的图（看视频/动画/滑动/游戏过程）——参数由你定：duration 采样秒数、count 帧数、fps 每秒帧数、every 每几秒一帧、mode=frames 一帧一张图 / sheet 拼图版、max_images 最多几张图、region 裁剪、delay 等待。看视频时先小段粗看（如 duration=4, fps=2），需要细节再加 fps/count 或裁剪 region 分段看。",
             "操作：优先 `mumu_phone_tap`（可传 text/index 直接点元素）；坐标与截图同尺度；`mumu_phone_text` 支持中文；`mumu_phone_app` 打开 App；`mumu_phone_key` 返回键/主页。",
-            "消息：只有 @你 或带触发词的消息会被转给你（对方只收到「正在玩手机」）；消息列在下方，想回用 `mumu_phone_say`，不想回就忽略。",
+            "消息：只有 @你 或带触发词的消息会被转给你（对方只收到「正在玩手机」）；消息列在下方，想回用 `mumu_phone_say`，不想回就忽略。你收到的消息和发出的回复会写回聊天上下文/iris L1，收手后普通对话能接着聊。",
             "回顾：`mumu_phone_recent` 查看你最近在手机上做过什么（操作记录/日记/统计）。",
         ]
         iris_names = self._iris_tool_names()
@@ -2605,6 +2836,15 @@ class MumuVmPlugin(Star):
         self._touch("say", util.truncate(text, 120))
         if not ok:
             return "发送失败：平台没有找到对应会话。"
+        # 记录到聊天上下文 / iris L1（Agent 在手机上发出的回复也要让后续对话知道）
+        await self._remember_phone_message(
+            "assistant",
+            text,
+            event=event,
+            sender="Agent",
+            umo=target_umo,
+            sender_id="assistant",
+        )
         return f"已发送给用户{'（回复 #' + msg_id + '）' if msg_id else ''}：{util.truncate(text, 200)}"
 
     @filter.llm_tool(name="mumu_phone_diary")

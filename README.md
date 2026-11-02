@@ -135,6 +135,9 @@
 | `frames_image_width` / `frames_sheet_tile_width` | 768 / 480 | frames 单帧宽度 / sheet 每格宽度 |
 | `frames_use_screenrecord` / `frames_filter_green` / `frames_dedupe_threshold` | false / true / 0.004 | 是否用录屏抽帧（默认否，改逐帧截图）/ 过滤绿屏帧 / 连续帧去重阈值 |
 | `window_hide_mode` | offscreen | 桌面隐藏策略：offscreen（屏幕外保持渲染，视频不中断）或 hide（旧版隐藏） |
+| `phone_chat_memory_enable` / `phone_l1_memory_enable` / `phone_native_history_enable` | true / true / true | 记录手机模式消息/回复：总开关 / 写 iris L1 / 写 AstrBot 原生对话历史 |
+| `phone_memory_inject_ttl_min` / `phone_memory_transcript_limit` / `phone_memory_inject_max_chars` | 180 / 20 / 1600 | 收手后普通聊天注入手机记录的有效分钟数 / 最多条数 / 最大字数 |
+| `phone_l1_max_chars` / `iris_plugin_name` | 450 / astrbot_plugin_iris_memory | 写入 iris L1 的单条字数上限 / iris 插件名 |
 | `media_assist_enable` | false | 媒体辅助总开关（关=不给 Agent 暴露录屏/录音工具） |
 | `stt_assist_enable` / `audio_llm_assist_enable` / `omni_assist_enable` | false / false / false | 三个可同时开启的转述能力：STT 转写 / 音频模型描述 / 视觉(全模态)转述 |
 | `stt_provider_id` / `audio_llm_provider_id` / `omni_provider_id` | 空 | 分别指定 Provider；留空自动选择（音频建议显式指定，见下方注意事项） |
@@ -277,6 +280,7 @@ astrbot_plugin_mumu_vm/
 
 完整历史见 [CHANGELOG.md](./CHANGELOG.md)，发布包见 [GitHub Releases](https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm/releases)。
 
+- **v1.6.3**（2026-11-03）：修复手机模式期间收到的消息/回复不进上下文——写入 iris L1、AstrBot 原生对话历史，并在收手后的普通聊天注入手机记录。
 - **v1.6.2**（2026-11-03）：修复 B 站等视频抽帧静帧/卡帧/绿屏——默认窗口用 offscreen 保持 Surface/解码器，连续采样改逐帧 screencap，新增绿屏过滤与更稳的去重。
 - **v1.6.1**（2026-10-28）：README 首屏重做 + 10 秒演示 GIF + Release 插件 zip + GitHub topics。
 - **v1.6.0**（2026-10-24）：可关闭 iris 兼容 + 插件自带本地语义记忆（使用记录 / 操作技巧）。

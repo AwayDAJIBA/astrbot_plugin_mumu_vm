@@ -2,6 +2,15 @@
 
 完整版本历史。发布包见 [GitHub Releases](https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm/releases)。
 
+## v1.6.3（2026-11-03）
+
+- 修复 **手机模式期间收到的消息 / Agent 在手机上的回复不会进入后续上下文**：
+  - 新增手机聊天转录：手机模式内的 @ 消息、`mumu_phone_say` 回复、收手摘要都会记录（SQLite/JSON 状态持久化）。
+  - 直接写入 **iris L1 会话缓冲**（通过 iris 插件实例的 `l1_buffer` 组件），收手后 iris 注入 L1 时能看到这些消息。
+  - 收手时写一份 **AstrBot 原生对话历史**（user/assistant 记录），不依赖 iris 也能保持连续。
+  - 普通聊天 `on_llm_request` 追加“最近的手机模式记录”（默认 180 分钟内，最多 20 条 / 1600 字），Agent 不会再回答“我刚刚没玩手机”。
+  - 新配置：`phone_chat_memory_enable`、`phone_l1_memory_enable`、`phone_native_history_enable`、`phone_memory_inject_ttl_min`、`phone_memory_transcript_limit`、`phone_memory_inject_max_chars`、`phone_l1_max_chars`、`iris_plugin_name`。
+
 ## v1.6.2（2026-11-03）
 
 - 修复 **B 站等视频抽帧静帧、卡帧、绿屏**：

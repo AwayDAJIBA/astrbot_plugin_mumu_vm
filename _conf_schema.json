@@ -434,6 +434,46 @@
     "description": "iris 背景缓存时长（秒），避免每次请求都查记忆",
     "default": 600
   },
+  "phone_chat_memory_enable": {
+    "type": "bool",
+    "description": "是否记录手机模式期间的消息/回复，并在收手后的普通聊天里注入上下文（避免 Agent 不知道刚刚玩过手机）",
+    "default": true
+  },
+  "phone_l1_memory_enable": {
+    "type": "bool",
+    "description": "是否把手机模式期间的消息/回复写进 iris 插件的 L1 会话缓冲（需 iris_compat_enable=true；拿不到 iris 时自动跳过）",
+    "default": true
+  },
+  "phone_l1_max_chars": {
+    "type": "int",
+    "description": "写入 iris L1 的单条消息最大字数（避免超过 iris 的单条 token 上限）",
+    "default": 450
+  },
+  "phone_native_history_enable": {
+    "type": "bool",
+    "description": "收手时是否把手机模式记录写入 AstrBot 原生对话历史（不依赖 iris；iris 开启时会另有 L1）",
+    "default": true
+  },
+  "phone_memory_transcript_limit": {
+    "type": "int",
+    "description": "注入普通上下文时最多带多少条手机模式消息/回复",
+    "default": 20
+  },
+  "phone_memory_inject_ttl_min": {
+    "type": "int",
+    "description": "手机模式记录在普通聊天里持续注入多少分钟（0=一直注入直到下一局手机模式）",
+    "default": 180
+  },
+  "phone_memory_inject_max_chars": {
+    "type": "int",
+    "description": "手机模式记录注入普通上下文的最大字数",
+    "default": 1600
+  },
+  "iris_plugin_name": {
+    "type": "string",
+    "description": "iris 记忆插件的插件名（默认 astrbot_plugin_iris_memory；用于直接写它的 L1）",
+    "default": "astrbot_plugin_iris_memory"
+  },
   "phone_comment_guard": {
     "type": "bool",
     "description": "是否在手机模式提示词里加入“评论只围绕当前内容、不要写无关信息/隐私”规则",

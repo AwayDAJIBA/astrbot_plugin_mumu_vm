@@ -137,6 +137,9 @@ class SessionState:
         self.session_lessons: list[dict[str, Any]] = list(
             data.get("session_lessons") or []
         )[-30:]
+        # 手机模式内的消息/回复记录（收手后仍保留，供下一轮普通聊天注入上下文）
+        self.transcript: list[dict[str, Any]] = list(data.get("transcript") or [])[-60:]
+        self.last_session_end_ts: float = float(data.get("last_session_end_ts") or 0)
 
     # ------------------------------------------------------------------ 持久化
     def snapshot(self) -> dict[str, Any]:
@@ -165,6 +168,8 @@ class SessionState:
             "last_hint_ts": self.last_hint_ts,
             "activity": self.activity[-200:],
             "session_lessons": self.session_lessons[-30:],
+            "transcript": self.transcript[-60:],
+            "last_session_end_ts": self.last_session_end_ts,
         }
 
     def save(self) -> None:
@@ -189,6 +194,8 @@ class SessionState:
         self.last_tool_ts = now
         self.last_action = ""
         self.session_lessons = []
+        # 新一局手机模式开始，清空上一局的聊天转录（上一局总结仍可在长期记忆里查）
+        self.transcript = []
         self.save()
 
     def end(self) -> None:
@@ -199,7 +206,60 @@ class SessionState:
         self.deadline_ts = 0
         self.auto_continue = True
         self.autoplay_running = False
+        self.last_session_end_ts = time.time()
         self.save()
+
+    # ------------------------------------------------------------------ 手机聊天转录
+    def add_transcript(
+        self,
+        role: str,
+        text: str,
+        *,
+        sender: str = "",
+        umo: str = "",
+        kind: str = "chat",
+    ) -> None:
+        """记录手机模式期间的收发消息，收手后注入普通上下文 / iris L1。"""
+        content = str(text or "").strip()
+        if not content:
+            return
+        self.transcript.append(
+            {
+                "ts": time.time(),
+                "role": role,
+                "text": content[:2000],
+                "sender": str(sender or "")[:120],
+                "umo": str(umo or ""),
+                "kind": str(kind or "chat"),
+            }
+        )
+        self.transcript = self.transcript[-60:]
+        self.save()
+
+    def transcript_text(
+        self, limit: int = 20, max_chars: int = 1800, since_ts: float = 0
+    ) -> str:
+        entries = [
+            item
+            for item in self.transcript
+            if float(item.get("ts") or 0) >= float(since_ts or 0)
+        ][-max(1, int(limit)) :]
+        lines: list[str] = []
+        for item in entries:
+            ts = float(item.get("ts") or 0)
+            stamp = time.strftime("%H:%M", time.localtime(ts)) if ts else "--:--"
+            role = str(item.get("role") or "")
+            who = str(item.get("sender") or "")
+            text = str(item.get("text") or "").strip()
+            if role == "user":
+                prefix = f"{stamp} {who or '用户'} 说"
+            elif role == "assistant":
+                prefix = f"{stamp} 我在手机上回复"
+            else:
+                prefix = f"{stamp} 系统记录"
+            lines.append(f"- {prefix}：{text}")
+        text = "\n".join(lines)
+        return util.truncate(text, max_chars) if max_chars > 0 else text
 
     def remaining_sec(self) -> float:
         if not self.deadline_ts:
