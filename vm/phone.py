@@ -88,7 +88,7 @@ class Phone:
             self.adb = adb
             self.screen = ScreenCapture(adb, self.config, self.shot_dir, logger=self.logger)
             if self._cfg("keep_window_hidden", True):
-                await self.mumu.hide_window(quiet=True)
+                await self.mumu.hide_for_agent(quiet=True)
             await self._post_boot()
             self._started_at = time.time()
             self._last_ready_check = time.time()
@@ -265,9 +265,18 @@ class Phone:
 
     async def status_text(self) -> str:
         st = await self.status()
+        if st.get("window_hidden"):
+            window_text = "已隐藏（仅 Agent 可见）"
+        elif st.get("android_started") and self._cfg("keep_window_hidden", True):
+            if self.mumu.window_hide_mode() == "hide":
+                window_text = "已隐藏（仅 Agent 可见）"
+            else:
+                window_text = "已移到屏幕外（用户不可见，渲染保持）"
+        else:
+            window_text = "可见/未运行"
         lines = [
             f"模拟器: {'运行中' if st.get('android_started') else '未启动'}（{st.get('player_state') or '—'}）",
-            f"窗口: {'已隐藏（仅 Agent 可见）' if st.get('window_hidden') else '可见/未运行'}",
+            f"窗口: {window_text}",
             f"adb: {st.get('device_state')}  屏幕: {st.get('screen') or '—'}",
             f"前台应用: {st.get('focus') or '—'}",
         ]

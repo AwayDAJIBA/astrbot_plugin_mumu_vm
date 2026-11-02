@@ -379,13 +379,11 @@ class PhoneMedia:
         self._audio_window_active = False
         try:
             if bool(self._cfg("keep_window_hidden", True)):
-                await self.plugin.phone.mumu.hide_window(quiet=True)
+                # 默认 offscreen 策略：保持渲染/视频，不再用 hide_window 销毁 Surface
+                await self.plugin.phone.mumu.hide_for_agent(quiet=True)
             else:
                 await self.plugin.phone.mumu.show_window()
-            hidden = self._hide_mumu_windows()
-            self._diag(
-                f"media 录音结束：已恢复 MuMu 窗口隐藏状态（{', '.join(hidden) or '无需额外隐藏'}）"
-            )
+            self._diag("media 录音结束：已恢复 MuMu 窗口隐藏/屏幕外状态")
         except Exception as exc:
             self._diag(f"media 录音结束恢复窗口失败: {util.truncate(repr(exc), 160)}")
 

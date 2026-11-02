@@ -104,6 +104,26 @@
     "description": "连续采样单次最长时长（秒，Agent 工具参数 duration 的上限）",
     "default": 20
   },
+  "frames_use_screenrecord": {
+    "type": "bool",
+    "description": "连续采样是否使用 screenrecord 录屏抽帧（默认否：改用逐帧 screencap，避免 MuMu 视频出现绿屏/静帧/卡帧）",
+    "default": false
+  },
+  "frames_filter_green": {
+    "type": "bool",
+    "description": "自动过滤整帧绿屏/异常帧，避免把绿图交给模型",
+    "default": true
+  },
+  "window_hide_mode": {
+    "type": "string",
+    "description": "桌面隐藏策略：offscreen（默认，把 MuMu 窗口移到屏幕外并保持渲染/视频播放，用户看不到）或 hide（旧版 hide_window，会暂停视频/可能静帧）",
+    "default": "offscreen"
+  },
+  "frames_dedupe_threshold": {
+    "type": "float",
+    "description": "连续帧去重阈值（越小越不合并；会同时看平均差和变化像素比例，避免把视频中的小变化误合并）",
+    "default": 0.004
+  },
   "frames_max_count": {
     "type": "int",
     "description": "连续采样单次最多帧数（Agent 参数 count 的上限）",

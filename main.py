@@ -42,7 +42,7 @@ from .vm import util
 PLUGIN_NAME = "astrbot_plugin_mumu_vm"
 AUTHOR = "AwayDAJIBA"
 DESC = "让 AI 独占操控一台安卓手机：自己截图、点击、打字"
-VERSION = "v1.6.1"
+VERSION = "v1.6.2"
 
 # 精简模式（普通聊天）下暴露的工具：让 Agent 知道有手机可用，又不占太多上下文
 COMPACT_TOOLS = {

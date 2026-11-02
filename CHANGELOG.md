@@ -2,6 +2,14 @@
 
 完整版本历史。发布包见 [GitHub Releases](https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm/releases)。
 
+## v1.6.2（2026-11-03）
+
+- 修复 **B 站等视频抽帧静帧、卡帧、绿屏**：
+  - 默认窗口隐藏策略改为 `window_hide_mode=offscreen`：MuMu 窗口移到屏幕外但保持 show，避免 `hide_window` 回收 Surface/MediaCodec 导致视频停止播放（logcat 实测可见 surface reconnect/decoder reclaim；进程并未闪退）。
+  - 连续帧采样默认改为**逐帧 screencap**（`frames_use_screenrecord=false`），避开 screenrecord 在 MuMu 视频/GPU 场景下的绿屏/卡帧；时间戳改为实际采样时间。
+  - 新增绿屏帧过滤（`frames_filter_green`）和更稳的连续帧去重（`frames_dedupe_threshold`，同时看平均差与变化像素比例，避免把视频小变化误合并成静帧）。
+  - 旧行为仍可配置：`window_hide_mode=hide` / `frames_use_screenrecord=true`，但不推荐用于视频。
+
 ## v1.6.1（2026-10-28）
 
 - README 首屏重做：三句话说明「是什么 / 能干什么 / 怎么装」，AI 生成声明移到文末。

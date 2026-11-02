@@ -352,17 +352,42 @@ class ScreenCapture:
         return images, size
 
     @staticmethod
+    def _looks_green(img: "Image.Image") -> bool:
+        """粗判整帧绿屏（MuMu screenrecord 偶发），避免把绿图喂给模型。"""
+        try:
+            px = list(img.resize((32, 18)).convert("RGB").getdata())
+            total = max(1, len(px))
+            strong = sum(1 for r, g, b in px if g >= 80 and g > r * 1.45 and g > b * 1.45)
+            mean_r = sum(p[0] for p in px) / total
+            mean_g = sum(p[1] for p in px) / total
+            mean_b = sum(p[2] for p in px) / total
+            return (
+                strong / total >= 0.45
+                and mean_g > mean_r + 15
+                and mean_g > mean_b + 15
+            )
+        except Exception:
+            return False
+
+    @staticmethod
     def _similar(a: "Image.Image", b: "Image.Image", threshold: float = 0.012) -> bool:
-        """快速判断两帧是否近似相同（缩略图逐像素平均差）。"""
+        """快速判断两帧是否近似相同。
+
+        除了平均亮度差，还看"变化像素比例"：屏幕大部分 UI 不动、只有视频/
+        动画区域变化时，平均差可能很小，但变化像素比例能识别出来，避免把
+        视频里的有效变化误合并成静帧。
+        """
         try:
             if a is b:
                 return True
-            ta = a.resize((32, 18)).convert("L")
-            tb = b.resize((32, 18)).convert("L")
+            ta = a.resize((128, 72)).convert("L")
+            tb = b.resize((128, 72)).convert("L")
             pa = list(ta.getdata())
             pb = list(tb.getdata())
-            diff = sum(abs(x - y) for x, y in zip(pa, pb)) / (len(pa) * 255.0)
-            return diff < threshold
+            diffs = [abs(x - y) for x, y in zip(pa, pb)]
+            mean_diff = sum(diffs) / (len(diffs) * 255.0)
+            changed = sum(1 for value in diffs if value > 6) / max(1, len(diffs))
+            return mean_diff < threshold and changed < 0.003
         except Exception:
             return False
 
@@ -426,8 +451,12 @@ class ScreenCapture:
         notes: list[str] = []
         frames: list[tuple["Image.Image", float]] = []
         method = "screencap-sparse"
+        use_screenrecord = bool(self._cfg("frames_use_screenrecord", False))
         try:
-            if force_screencap or interval >= 0.8:
+            # 默认走逐帧 screencap：MuMu 的 screenrecord 在部分视频/GPU 场景会
+            # 出现绿屏、静帧、时间轴卡住；逐帧截图最稳。只有用户显式打开
+            # frames_use_screenrecord 且间隔很密时才用录屏抽帧。
+            if force_screencap or (not use_screenrecord) or interval >= 0.8:
                 frames, method = await self._sample_screencaps(count_i, interval)
             else:
                 frames, method = await self._sample_screenrecord(duration, interval, count_i)
@@ -436,9 +465,31 @@ class ScreenCapture:
             frames, method = await self._sample_screencaps(count_i, max(interval, 0.15))
         if not frames:
             raise AdbError("没有采到任何帧")
+
+        # 过滤绿屏/异常帧（screenrecord 在视频解码/隐藏窗口时偶尔会整帧绿）
+        if bool(self._cfg("frames_filter_green", True)):
+            filtered: list[tuple["Image.Image", float]] = []
+            green_dropped = 0
+            for img, ts in frames:
+                if self._looks_green(img):
+                    green_dropped += 1
+                    continue
+                filtered.append((img, ts))
+            if green_dropped:
+                notes.append(
+                    f"已过滤 {green_dropped} 张绿屏/异常帧"
+                    "（可改用 mumu_phone_screen 或重试）。"
+                )
+            if filtered:
+                frames = filtered
+            else:
+                raise AdbError("采样到的帧都是绿屏/异常帧，请重新采样")
         screen_size = frames[0][0].size
 
         # 裁剪 / 缩放 / 打时间戳标签，同时做连续相同帧合并
+        dedupe_threshold = float(
+            util.clamp(float(self._cfg("frames_dedupe_threshold", 0.004)), 0.0005, 0.02)
+        )
         prepared: list[tuple["Image.Image", float, int, int]] = []  # (img, ts, count, start_idx)
         for idx, (img, ts) in enumerate(frames):
             if region:
@@ -447,7 +498,9 @@ class ScreenCapture:
                     img = img.crop((x, y, x + w, y + h))
                 except Exception:
                     notes.append(f"region 解析失败，已忽略：{region!r}")
-            if prepared and dedupe and self._similar(prepared[-1][0], img, threshold=0.006):
+            if prepared and dedupe and self._similar(
+                prepared[-1][0], img, threshold=dedupe_threshold
+            ):
                 prev_img, prev_ts, prev_n, prev_start = prepared[-1]
                 prepared[-1] = (prev_img, prev_ts, prev_n + 1, prev_start)
                 continue
@@ -457,6 +510,13 @@ class ScreenCapture:
         groups = prepared
         if dedupe and len(groups) < total_sampled:
             notes.append(f"连续相同/近似帧已合并：{total_sampled} 帧 → {len(groups)} 帧有效画面。")
+        if total_sampled >= 3 and len(groups) == 1 and duration >= 1.2:
+            notes.append(
+                "画面基本静止：视频可能已暂停/页面没变化；"
+                "如果在看视频，先点一下播放再重试。"
+            )
+        if method.startswith("screencap") and count_i >= 3 and duration > 0:
+            notes.append("逐帧截图模式：时间戳为实际采样时间，画面最稳，不会出现录屏绿屏。")
 
         image_width = int(width or (self._cfg("frames_sheet_tile_width", 480) if mode == "sheet" else self._cfg("frames_image_width", 768)))
         image_width = int(util.clamp(image_width, 200, 1600))
@@ -536,7 +596,7 @@ class ScreenCapture:
     async def _sample_screencaps(
         self, count: int, interval: float
     ) -> tuple[list[tuple["Image.Image", float]], str]:
-        """稀疏采样：直接连续 screencap，时间点准、开销小（不用录视频/解码）。"""
+        """连续 screencap 采帧：时间戳取实际采样时间，避免解码/卡帧导致时间轴错位。"""
         if Image is None:
             return [], "screencap-sparse"
         frames: list[tuple["Image.Image", float]] = []
@@ -545,7 +605,7 @@ class ScreenCapture:
             try:
                 png = await self.adb.screencap_png()
                 img = Image.open(io.BytesIO(png)).convert("RGB")
-                frames.append((img, i * interval))
+                frames.append((img, max(0.0, time.time() - start)))
             except Exception:
                 break
             if i < count - 1:
@@ -558,16 +618,29 @@ class ScreenCapture:
     async def _sample_screenrecord(
         self, duration: float, interval: float, count: int
     ) -> tuple[list[tuple["Image.Image", float]], str]:
-        """密集采样：screenrecord 录像 -> 拉回 -> ffmpeg 按采样间隔抽帧。"""
+        """可选：screenrecord 录像 -> 拉回 -> ffmpeg 按采样间隔抽帧。
+
+        默认不启用（frames_use_screenrecord=false）；MuMu 在部分视频/GPU 场景下
+        screenrecord 会出现绿屏、静帧或时间轴卡住，逐帧 screencap 更稳。
+        """
         if Image is None:
             return [], "screenrecord+ffmpeg"
-        device_path = "/sdcard/mumu_vm_sample.mp4"
-        await self.adb.shell(f"rm -f {device_path}", timeout=10)
-        limit = int(util.clamp(math.ceil(duration) + 1, 1, 60))
-        await self.adb.screen_record(device_path, time_limit=limit)
+        # 防止上一次异常退出残留的 screenrecord 抢编码器
+        await self.adb.shell("pkill -INT screenrecord 2>/dev/null; true", timeout=10)
+        await asyncio.sleep(0.15)
+        device_path = f"/sdcard/mumu_vm_sample_{int(time.time() * 1000)}.mp4"
         local = self.shot_dir / "_sample.mp4"
-        if not await self.adb.pull(device_path, local):
-            raise AdbError("拉取录屏文件失败")
+        try:
+            await self.adb.shell(f"rm -f {device_path}", timeout=10)
+            limit = int(util.clamp(math.ceil(duration) + 1, 1, 60))
+            await self.adb.screen_record(device_path, time_limit=limit)
+            if not await self.adb.pull(device_path, local):
+                raise AdbError("拉取录屏文件失败")
+        finally:
+            try:
+                await self.adb.shell(f"rm -f {device_path}", timeout=10)
+            except Exception:
+                pass
         frames: list[tuple["Image.Image", float]] = []
         if not self.ffmpeg:
             raise AdbError("没找到 ffmpeg，无法从录屏抽帧")

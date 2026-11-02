@@ -170,15 +170,34 @@ class MuMuController:
             return
         deadline = time.time() + timeout
         while time.time() < deadline:
-            ok = await self.hide_window(quiet=True)
+            ok = await self.hide_for_agent(quiet=True)
             if ok:
                 # 再确认两次，防止窗口在完全初始化后又弹出来
                 await asyncio.sleep(3)
-                await self.hide_window(quiet=True)
+                await self.hide_for_agent(quiet=True)
                 await asyncio.sleep(3)
-                await self.hide_window(quiet=True)
+                await self.hide_for_agent(quiet=True)
                 return
             await asyncio.sleep(1.5)
+
+    def window_hide_mode(self) -> str:
+        """窗口隐藏策略：offscreen（默认，保持渲染/视频）或 hide（真正隐藏）。"""
+        mode = str(self._cfg("window_hide_mode", "offscreen") or "offscreen").strip().lower()
+        return mode if mode in ("offscreen", "hide") else "offscreen"
+
+    async def hide_for_agent(self, quiet: bool = False) -> bool:
+        """按配置隐藏窗口；默认移到屏幕外但保持 show，避免视频/解码器被暂停。
+
+        MuMu 的 hide_window 会销毁/重连 Surface，B 站等视频 App 会因此停止播放
+        （logcat 可见 MediaCodec/surface reclaim），画面静止甚至闪烁绿屏。
+        offscreen 模式用户桌面上看不到窗口，但模拟器仍认为窗口可见，视频继续播放。
+        """
+        if self.window_hide_mode() == "hide":
+            ok = await self.hide_window(quiet=quiet)
+            self._hide_windows()
+            return ok
+        moved = await self.show_offscreen()
+        return bool(moved) or True
 
     async def hide_window(self, quiet: bool = False) -> bool:
         try:
@@ -199,6 +218,85 @@ class MuMuController:
             "control", "-v", str(self.vm_index), "show_window", timeout=15
         )
         return rc == 0
+
+    # ------------------------------------------------------------------ 窗口渲染控制
+    # MuMu 的 hide_window 会让部分 App（例如 B 站）认为窗口不可见而暂停视频，
+    # 同时画面不继续渲染，抽帧就会得到静帧。这里提供"移到屏幕外但保持 show"
+    # 的隐藏方式：用户桌面看不到窗口，但 Android/模拟器认为它可见，视频继续播放。
+    @staticmethod
+    def _iter_mumu_windows() -> list[tuple[int, str, bool]]:
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            windows: list[tuple[int, str, bool]] = []
+
+            def _callback(hwnd, _lparam):
+                length = user32.GetWindowTextLengthW(hwnd)
+                buffer = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buffer, length + 1)
+                title = buffer.value
+                if title and ("MuMu" in title or "模拟器" in title):
+                    windows.append((int(hwnd), title, bool(user32.IsWindowVisible(hwnd))))
+                return True
+
+            user32.EnumWindows(
+                ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)(
+                    _callback
+                ),
+                0,
+            )
+            return windows
+        except Exception:
+            return []
+
+    @classmethod
+    def _move_windows_offscreen(cls) -> list[str]:
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            moved: list[str] = []
+            for hwnd, title, _visible in cls._iter_mumu_windows():
+                user32.SetWindowPos(
+                    hwnd, 0, -32000, -32000, 0, 0, 0x0004 | 0x0010 | 0x0001
+                )
+                moved.append(title)
+            return moved
+        except Exception:
+            return []
+
+    @classmethod
+    def _hide_windows(cls) -> list[str]:
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            hidden: list[str] = []
+            for hwnd, title, visible in cls._iter_mumu_windows():
+                if visible:
+                    user32.ShowWindow(hwnd, 0)
+                    hidden.append(title)
+            return hidden
+        except Exception:
+            return []
+
+    async def show_offscreen(self) -> list[str]:
+        """把所有 MuMu 窗口移到屏幕外再 show，保持模拟器渲染/视频可见。"""
+        self._move_windows_offscreen()
+        ok = await self.show_window()
+        await asyncio.sleep(0.25)
+        # show 可能把窗口恢复回原位置，再移一次，确保用户看不到
+        moved = self._move_windows_offscreen()
+        if not ok and self.logger:
+            self.logger.warning("MuMu 屏幕外显示失败（show_window 返回失败）")
+        return moved
+
+    async def hide_all_windows(self) -> list[str]:
+        """恢复真正隐藏：hide_window + 隐藏所有 MuMu 窗口（含启动器）。"""
+        await self.hide_window(quiet=True)
+        return self._hide_windows()
 
     async def shutdown(self, timeout: float = 60) -> bool:
         try:
@@ -357,7 +455,7 @@ class MuMuController:
                 )
                 if (util.decode(out) + util.decode(err)).strip() == "1":
                     if self._cfg("keep_window_hidden", True):
-                        await self.hide_window(quiet=True)
+                        await self.hide_for_agent(quiet=True)
                     return last_info
             await asyncio.sleep(2)
         raise MuMuError(

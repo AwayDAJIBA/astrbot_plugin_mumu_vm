@@ -133,6 +133,8 @@
 | `grid_max_width` | 2000 | 多帧拼图整图宽度（旧版拼图遗留） |
 | `frames_max_duration_sec` / `frames_max_count` / `frames_max_images` | 20 / 24 / 8 | 连续采样单次时长、帧数、返回图片数上限 |
 | `frames_image_width` / `frames_sheet_tile_width` | 768 / 480 | frames 单帧宽度 / sheet 每格宽度 |
+| `frames_use_screenrecord` / `frames_filter_green` / `frames_dedupe_threshold` | false / true / 0.004 | 是否用录屏抽帧（默认否，改逐帧截图）/ 过滤绿屏帧 / 连续帧去重阈值 |
+| `window_hide_mode` | offscreen | 桌面隐藏策略：offscreen（屏幕外保持渲染，视频不中断）或 hide（旧版隐藏） |
 | `media_assist_enable` | false | 媒体辅助总开关（关=不给 Agent 暴露录屏/录音工具） |
 | `stt_assist_enable` / `audio_llm_assist_enable` / `omni_assist_enable` | false / false / false | 三个可同时开启的转述能力：STT 转写 / 音频模型描述 / 视觉(全模态)转述 |
 | `stt_provider_id` / `audio_llm_provider_id` / `omni_provider_id` | 空 | 分别指定 Provider；留空自动选择（音频建议显式指定，见下方注意事项） |
@@ -181,8 +183,8 @@
 
 ## 6. 实现要点
 
-- **隐藏窗口**：`MuMuManager.exe control -v <idx> hide_window`；启动后轮询确认（MuMu 窗口可能在初始化后又弹出来）。隐藏后 adb screencap / screenrecord 仍然正常，实测画面持续渲染。**但实测隐藏窗口时 MuMu 引擎会停掉音频输出**（进程 loopback 抓到的 RMS=0）；所以录音开始前插件会把 MuMu 窗口移到屏幕外再 `show_window`（用户看不到，声音恢复），录完再 `hide_window` + 隐藏所有 MuMu 窗口。
-- **连续采样**：稀疏采样（间隔 ≥0.8s）直接连续 `screencap`；密集采样走 `screenrecord` → pull → ffmpeg 按采样间隔抽帧；每帧可裁剪/缩放/打时间戳标签，按 `mode` 输出"一帧一张图"或"多帧图版"，一次调用把 N 张图（`ImageContent`）一起返回，AstrBot 会把它们全部放进模型上下文。
+- **窗口隐藏**：默认 `window_hide_mode=offscreen`——把 MuMu 窗口移到屏幕外并保持 `show`，用户桌面上看不到，但模拟器仍认为窗口可见，视频/解码器/渲染不会中断；`window_hide_mode=hide` 是旧版 `hide_window`，部分视频 App 会因 Surface/MediaCodec 被回收而停止播放、抽帧静帧甚至出现绿屏（实测 B 站）。
+- **连续采样**：默认**逐帧 screencap**（时间戳取实际采样时间），避免 MuMu `screenrecord` 在视频/GPU 场景下的绿屏/静帧/时间轴卡帧；可用 `frames_use_screenrecord=true` 切回录屏抽帧（不推荐）。采样结果会自动过滤绿屏帧，并用"平均差 + 变化像素比例"去重，避免视频里的小变化被误合并成静帧。
 - **精简注入**：`@filter.on_llm_request` 在请求组装后：
   - 手机模式：从 ToolManager **重建**只含 26 个手机工具（+白名单 + 可配置记忆插件工具）的 ToolSet（不依赖其他插件/persona 是否改写过工具集），裁剪 `contexts` 到最近 N 条，清空 `extra_user_content_parts`，追加手机操作提示；
   - 普通模式：移除 16 个重型手机工具，只补 4 个轻量工具。
@@ -230,13 +232,13 @@ astrbot_plugin_mumu_vm/
 - 单 Owner 模型：主动消息会发到最近一次与机器人对话的会话（管理员/私聊优先）。
 - 一次只操作一个模拟器实例（`vm_index`）；多开请复制多份插件或改实例号（暂不支持同一个插件同时控制多台）。
 - 自主玩手机受模型能力影响，建议给 `autoplay_provider_id` 指定图+工具都强的模型；提示词已禁止支付/转账/密码/广告安装等高风险操作，但仍建议在水位可控的账号上使用，并设置每日预算。
-- 画面静止时 screenrecord 只有 1~2 帧，属于正常现象（已自动合并并提示）。
+- 画面本身静止时会提示"画面基本静止"；如果放视频时提示静止，先点一下播放再采样。
 - 模拟器分辨率/横竖屏变化时截图坐标与 `input tap` 同尺度，插件自动从截图中读取尺寸，无需额外配置。
 - **adb shell 权限较大**：`mumu_phone_shell` 默认只允许管理员/私聊/所有者调用（`shell_tool_require_admin=true`）；建议同时配置每日预算（`autoplay_daily_budget_minutes` / `autoplay_runs_per_day`）并使用测试账号，随时可手动收手。
 - **媒体辅助注意**：
   - 默认全部关闭；开启后会把录音/录屏帧发送到对应的 STT / 音频 / 视觉 Provider，请确认这些服务的隐私策略。
   - 录音后端 `capturekit` 需要额外安装（`pip install capturekit`）；它只抓 MuMu 进程声音，不会把 Windows 扬声器里其它应用的声音录进来。不装则只能用录屏/视觉转述或 ffmpeg 专用设备后端。
-  - **MuMu 隐藏窗口时会静音**（实测隐藏后进程 loopback 抓到 RMS=0）。录音开始前插件会临时把 MuMu 窗口移到屏幕外再 show（用户看不到），让引擎恢复音频渲染；录完再隐藏。此时 Windows 会实际播放 MuMu 的声音（可能被用户听到），但采集范围仍只有 MuMu 进程；录屏/截图时不会改变窗口可见性。
+  - **MuMu 旧版 hide_window 会静音/暂停视频**；默认改为 offscreen（窗口在屏幕外但保持渲染），所以玩手机期间 Windows 可能实际播放 MuMu 的声音；录音采集仍只抓 MuMu 进程，不会录其它应用。若想静音优先，可把 `window_hide_mode` 改为 `hide`（代价是视频抽帧可能静帧/绿屏）。
   - 音频模型自动选择可能挑到不支持音频输入的 Provider（表现为模型说"没收到音频"）；此时请在 `audio_llm_provider_id` 显式填一个支持音频的模型（例如 `xiaomi/mimo-v2.6-pro`）。
   - 录屏/录音期间会更新空闲计时，避免手机模式因"空闲"自动收手；但模式总时长仍然生效。
   - **原版沙盒测试结论（v1.4.1 实测）**：
@@ -275,6 +277,7 @@ astrbot_plugin_mumu_vm/
 
 完整历史见 [CHANGELOG.md](./CHANGELOG.md)，发布包见 [GitHub Releases](https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm/releases)。
 
+- **v1.6.2**（2026-11-03）：修复 B 站等视频抽帧静帧/卡帧/绿屏——默认窗口用 offscreen 保持 Surface/解码器，连续采样改逐帧 screencap，新增绿屏过滤与更稳的去重。
 - **v1.6.1**（2026-10-28）：README 首屏重做 + 10 秒演示 GIF + Release 插件 zip + GitHub topics。
 - **v1.6.0**（2026-10-24）：可关闭 iris 兼容 + 插件自带本地语义记忆（使用记录 / 操作技巧）。
 - **v1.5.0**（2026-10-24）：Agent 自行判断进入手机模式 + 同一轮回答内恢复普通工具组。
