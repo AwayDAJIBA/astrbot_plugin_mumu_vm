@@ -168,6 +168,7 @@
 | `phone_persona_prompt` / `phone_persona_fallback_astrbot` | 空（回退会话人格）/ true | 手机模式和自主玩的单独人格提示词（不读系统提示词，可自己填角色卡；留空则回退会话人格） |
 | `phone_iris_inject_query` / `phone_iris_inject_keywords` | `{owner} 最近在做什么 近况 项目 喜好` / 近况,项目,喜好,视频,评论 | 注入 iris 时的检索语句模板（支持 `{owner}` / `{goal}`）与追加关键词 |
 | `phone_iris_tools_enable` / `phone_iris_tool_names` | true / search_memory,get_profile,save_memory | 玩手机时额外暴露给 Agent 的记忆插件工具（需 `iris_compat_enable=true`） |
+| `comment_dedupe_enable` / `comment_dedupe_context_limit` | true / 20 | 评论去重：评论前查这条视频/动态是否评过，评过就划走；提示词附带最近评论清单的条数（0=只用工具查） |
 | `vm_mode_extra_tools` | send_message_to_user | 手机模式额外保留的工具 |
 | `autoplay_enable` | true | 允许空闲自动玩 |
 | `autoplay_goals` | 三条目标 | 空闲玩的目标池，轮流使用 |

@@ -479,6 +479,16 @@
     "description": "是否在手机模式提示词里加入“评论只围绕当前内容、不要写无关信息/隐私”规则",
     "default": true
   },
+  "comment_dedupe_enable": {
+    "type": "bool",
+    "description": "评论去重：评论前先查这条视频/动态有没有评论过，已评论过的就划走不再重复评论；评论后自动记进已评论清单",
+    "default": true
+  },
+  "comment_dedupe_context_limit": {
+    "type": "int",
+    "description": "提示词里附带“最近评论过”清单的条数（0=不附带，只让 Agent 用 mumu_phone_comment_check 查）",
+    "default": 20
+  },
   "phone_iris_inject_query": {
     "type": "string",
     "description": "注入 iris 记忆时用的检索语句模板；可用 {owner}（用户称呼）和 {goal}（本次玩手机目标）占位",

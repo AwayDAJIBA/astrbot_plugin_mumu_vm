@@ -1,7 +1,7 @@
 name: astrbot_plugin_mumu_vm
 display_name: MuMu 安卓虚拟机（Agent 手机）
 desc: '让 AI 独占操控一台安卓手机：自己截图、点击、打字'
-version: v1.6.3
+version: v1.6.4
 author: AwayDAJIBA
 astrbot_version: '>=4.27.3,<5'
 repo: https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm

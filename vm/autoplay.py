@@ -27,7 +27,7 @@ DEFAULT_SYSTEM_PROMPT = """你正在"玩手机"：你通过 MuMu 安卓模拟器
 6. 一次回合（本轮）最多做 6~10 次工具调用，然后停下来输出一句简短小结，格式：本轮小结：<你做了什么、看到什么、下一步想干嘛>。
 7. 操作总结会自动写入长期记忆，不要在聊天里长篇复述；想收手直接调用 mumu_phone_exit。
 8. 如果觉得该结束了，也调用 mumu_phone_exit（不要只用文字告别）。
-9. 评论/发言规则：在视频/动态下评论时只评论当前内容本身；不要写与当前内容无关的个人近况、聊天内容、隐私或无关信息；不要暴露"记忆/资料/我是AI"；不确定是否合适就不发评论。
+9. 评论/发言规则：在视频/动态下评论时只评论当前内容本身；不要写与当前内容无关的个人近况、聊天内容、隐私或无关信息；不要暴露"记忆/资料/我是AI"；同一条视频/动态**不要重复评论**（评论前用 mumu_phone_comment_check 查、评论发出后用 mumu_phone_comment_log 记）；不确定是否合适就不发评论。
 """
 
 
@@ -313,6 +313,25 @@ class AutoplayEngine:
                 "可以用 mumu_phone_memory 语义检索以前玩手机的使用记录和操作技巧；"
                 "遇到好用的操作/踩坑时也可以用 mumu_phone_lesson 记一条。"
             )
+        if bool(self._cfg("comment_dedupe_enable", True)) and (
+            "mumu_phone_comment_check" in {tool.name for tool in tools.tools}
+        ):
+            block = (
+                "\n\n# 评论去重（重要）\n"
+                "发评论前先调用 `mumu_phone_comment_check(key=BV号或视频标题)`；"
+                "返回“已经评论过”就不要再评，直接划走换下一条。\n"
+                "评论发出成功后立刻调用 `mumu_phone_comment_log(key=..., title=..., comment=...)` 记一笔，"
+                "不记的下次会被当成没评过，又会重复评。"
+            )
+            limit = int(
+                util.clamp(int(self._cfg("comment_dedupe_context_limit", 20)), 0, 100)
+            )
+            if limit > 0:
+                block += (
+                    f"\n\n最近评论过（共 {len(self.state.commented)} 条，发评论前先对照）：\n"
+                    + self.state.commented_text(limit=limit)
+                )
+            system_prompt += block
         max_steps = int(util.clamp(int(self._cfg("autoplay_max_steps_per_round", 28)), 4, 120))
         resp = await self.context.tool_loop_agent(
             event=event,

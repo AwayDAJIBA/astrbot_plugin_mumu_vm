@@ -140,6 +140,8 @@ class SessionState:
         # 手机模式内的消息/回复记录（收手后仍保留，供下一轮普通聊天注入上下文）
         self.transcript: list[dict[str, Any]] = list(data.get("transcript") or [])[-60:]
         self.last_session_end_ts: float = float(data.get("last_session_end_ts") or 0)
+        # 已经评论过的视频/动态（去重：key 一般是 BV 号或标题）
+        self.commented: list[dict[str, Any]] = list(data.get("commented") or [])[-300:]
 
     # ------------------------------------------------------------------ 持久化
     def snapshot(self) -> dict[str, Any]:
@@ -170,6 +172,7 @@ class SessionState:
             "session_lessons": self.session_lessons[-30:],
             "transcript": self.transcript[-60:],
             "last_session_end_ts": self.last_session_end_ts,
+            "commented": self.commented[-300:],
         }
 
     def save(self) -> None:
@@ -380,6 +383,83 @@ class SessionState:
         if not entries:
             return "（暂无）"
         return "\n".join(f"{e.get('time', '')} [{e.get('kind', 'note')}] {e.get('text', '')}" for e in entries)
+
+    # ------------------------------------------------------------------ 评论去重
+    @staticmethod
+    def _comment_key(text: str) -> str:
+        """把 BV 号/标题归一化：去空白、标点、大小写，只留字母数字和汉字假名。"""
+        raw = str(text or "").strip().lower()
+        return "".join(ch for ch in raw if ch.isalnum())
+
+    def find_commented(self, key: str) -> dict[str, Any] | None:
+        """查这条视频/动态是否已经评论过；key 可以是 BV 号，也可以是标题。"""
+        target = self._comment_key(key)
+        if not target:
+            return None
+        for item in reversed(self.commented):
+            for cand in (item.get("key"), item.get("title")):
+                current = self._comment_key(str(cand or ""))
+                if not current:
+                    continue
+                if current == target:
+                    return item
+                # 标题常有前后缀（「【中字】」「完整版」之类），互相包含也算同一条
+                if len(target) >= 4 and len(current) >= 4:
+                    if target in current or current in target:
+                        return item
+        return None
+
+    def add_commented(
+        self, key: str, title: str = "", comment: str = ""
+    ) -> dict[str, Any]:
+        """记一条"已评论"，同一条重复记录时只更新时间和评论内容。"""
+        key = str(key or "").strip()
+        title = str(title or "").strip()
+        comment = str(comment or "").strip()
+        exist = self.find_commented(key or title)
+        if exist is not None:
+            exist["ts"] = time.time()
+            exist["time"] = util.now_str("%m-%d %H:%M")
+            if key:
+                exist["key"] = util.truncate(key, 200)
+            if title:
+                exist["title"] = util.truncate(title, 200)
+            if comment:
+                exist["comment"] = util.truncate(comment, 300)
+            self.commented.remove(exist)
+            self.commented.append(exist)
+            self.save()
+            return exist
+        item = {
+            "ts": time.time(),
+            "time": util.now_str("%m-%d %H:%M"),
+            "key": util.truncate(key, 200),
+            "title": util.truncate(title, 200),
+            "comment": util.truncate(comment, 300),
+        }
+        self.commented.append(item)
+        self.commented = self.commented[-300:]
+        self.save()
+        return item
+
+    def commented_text(self, limit: int = 20) -> str:
+        """给提示词用的"最近评论过"清单（新的在前）。"""
+        items = self.commented[-max(1, int(limit)):][::-1]
+        if not items:
+            return "（还没有评论记录）"
+        lines: list[str] = []
+        for item in items:
+            stamp = str(item.get("time") or "")
+            title = str(item.get("title") or item.get("key") or "").strip()
+            key = str(item.get("key") or "").strip()
+            if key and key not in title:
+                title = f"{title}（{key}）" if title else key
+            comment = str(item.get("comment") or "").strip()
+            line = f"- {stamp} {util.truncate(title, 90)}"
+            if comment:
+                line += f"｜当时评论：{util.truncate(comment, 60)}"
+            lines.append(line)
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------ 每日预算
     def reset_daily_if_needed(self) -> None:

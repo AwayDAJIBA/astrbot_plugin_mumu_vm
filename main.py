@@ -42,7 +42,7 @@ from .vm import util
 PLUGIN_NAME = "astrbot_plugin_mumu_vm"
 AUTHOR = "AwayDAJIBA"
 DESC = "让 AI 独占操控一台安卓手机：自己截图、点击、打字"
-VERSION = "v1.6.3"
+VERSION = "v1.6.4"
 
 # 精简模式（普通聊天）下暴露的工具：让 Agent 知道有手机可用，又不占太多上下文
 COMPACT_TOOLS = {
@@ -69,6 +69,8 @@ FULL_ONLY_TOOLS = {
     "mumu_phone_diary",
     "mumu_phone_lesson",
     "mumu_phone_memory",
+    "mumu_phone_comment_check",
+    "mumu_phone_comment_log",
     "mumu_phone_exit",
     "mumu_phone_media_status",
     "mumu_phone_record_start",
@@ -1490,6 +1492,26 @@ class MumuVmPlugin(Star):
                     "3. 不要提自己是 AI/机器人/插件，也不要提这些背景资料的来源；不确定是否合适就不发评论。",
                 ]
             )
+            if bool(self._cfg("comment_dedupe_enable", True)):
+                lines.extend(
+                    [
+                        "4. **同一条视频/动态不要重复评论**：发评论前先调用 `mumu_phone_comment_check(key=BV号或视频标题)`；"
+                        "返回“已经评论过”就不要再评，直接划走换下一条。",
+                        "5. 评论发出成功后立刻调用 `mumu_phone_comment_log(key=..., title=..., comment=...)` 记一笔；"
+                        "不记的下次会被当成没评过，又会重复评。",
+                    ]
+                )
+                limit = int(
+                    util.clamp(int(self._cfg("comment_dedupe_context_limit", 20)), 0, 100)
+                )
+                if limit > 0 and not cache_friendly:
+                    lines.extend(
+                        [
+                            "",
+                            f"### 最近评论过（共 {len(self.state.commented)} 条，发评论前先对照，别重复）",
+                            self.state.commented_text(limit=limit),
+                        ]
+                    )
         return "\n".join(lines)
 
     @staticmethod
@@ -1956,6 +1978,11 @@ class MumuVmPlugin(Star):
             f"累计：操作 {self.state.total_actions} 次，截图/采样 {self.state.total_shots} 张；"
             f"今日自主玩 {self.state.daily_minutes():.0f} 分钟"
         )
+        if self.state.commented:
+            lines.append(
+                f"已评论过的视频/动态（共 {len(self.state.commented)} 条，别重复评）："
+            )
+            lines.append(self.state.commented_text(limit=limit_i))
         return "\n".join(lines)
 
     @filter.llm_tool(name="mumu_phone_status")
@@ -2897,6 +2924,72 @@ class MumuVmPlugin(Star):
         return (
             f"已记录操作经验 #{count}：遇到「{util.truncate(situation, 80)}」→ "
             f"{util.truncate(action, 120)}。收手时会作为《操作教程总结》写入长期记忆（可选）。"
+            + self._tail()
+        )
+
+    @filter.llm_tool(name="mumu_phone_comment_check")
+    async def mumu_phone_comment_check(
+        self,
+        event: AstrMessageEvent,
+        key: str,
+    ) -> str:
+        """评论去重：发评论前先查这条视频/动态以前有没有评论过。
+
+        查到"已经评论过"就不要再评，直接划走换下一条；没评过才评。
+        同一轮里查过的也算，不必重复查。
+
+        Args:
+            key(string): 视频 BV 号或视频标题（能认出来是哪一条就行，标题越长越准）
+        """
+        guard = self._mode_guard()
+        if guard:
+            return guard
+        if not key.strip():
+            return "key 不能为空：填 BV 号或视频标题。"
+        self._touch("comment_check", util.truncate(key.strip(), 60))
+        hit = self.state.find_commented(key)
+        if hit is None:
+            return (
+                f"没评论过「{util.truncate(key.strip(), 80)}」，可以评。"
+                "评论发出去之后记得调用 mumu_phone_comment_log 记一笔。"
+                + self._tail()
+            )
+        return (
+            f"已经评论过「{util.truncate(str(hit.get('title') or hit.get('key') or key), 80)}」"
+            f"（{hit.get('time') or ''}）"
+            + (f"，当时的评论：{util.truncate(str(hit.get('comment') or ''), 80)}" if hit.get("comment") else "")
+            + "。不要再评论这条，直接划走换下一条。"
+            + self._tail()
+        )
+
+    @filter.llm_tool(name="mumu_phone_comment_log")
+    async def mumu_phone_comment_log(
+        self,
+        event: AstrMessageEvent,
+        key: str,
+        title: str = "",
+        comment: str = "",
+    ) -> str:
+        """评论发出成功后记一笔，供以后去重（不记就等于没评论过，下次会重复评）。
+
+        Args:
+            key(string): 视频 BV 号；看不到 BV 号就填视频标题
+            title(string): 视频标题（可选，方便以后认）
+            comment(string): 这次发的评论内容（可选）
+        """
+        guard = self._mode_guard()
+        if guard:
+            return guard
+        if not key.strip() and not title.strip():
+            return "key 和 title 至少填一个。"
+        item = self.state.add_commented(
+            key.strip() or title.strip(), title=title.strip(), comment=comment.strip()
+        )
+        self._touch("comment_log", util.truncate(title.strip() or key.strip(), 60))
+        total = len(self.state.commented)
+        return (
+            f"已记下评论：{util.truncate(str(item.get('title') or item.get('key') or ''), 80)}"
+            f"（累计 {total} 条）。以后评论前查一下就不会重复了。"
             + self._tail()
         )
 

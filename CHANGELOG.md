@@ -2,6 +2,15 @@
 
 完整版本历史。发布包见 [GitHub Releases](https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm/releases)。
 
+## v1.6.4（2026-11-05）
+
+- 新增 **评论去重**：玩手机刷视频时不再重复评论已经评论过的视频。
+  - 新增工具 `mumu_phone_comment_check(key)`：发评论前查 BV 号/标题是否评过，评过就划走。
+  - 新增工具 `mumu_phone_comment_log(key, title, comment)`：评论发出后记一笔，持久化到 `state.json` 的 `commented` 列表（最多 300 条，同一条只更新不重复占位）。
+  - 标题做归一化 + 互相包含匹配，`【中字】`、`完整版` 这类前后缀不会绕过查重。
+  - 手机模式与自主玩的系统提示词都加了去重规则，并附带"最近评论过"清单。
+  - 新配置：`comment_dedupe_enable`（默认 true）、`comment_dedupe_context_limit`（默认 20，0=不附带清单）。
+
 ## v1.6.3（2026-11-03）
 
 - 修复 **手机模式期间收到的消息 / Agent 在手机上的回复不会进入后续上下文**：
