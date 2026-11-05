@@ -2,6 +2,16 @@
 
 完整版本历史。发布包见 [GitHub Releases](https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm/releases)。
 
+## v1.6.5（2026-11-05）
+
+- 动态画面采样重做：`mumu_phone_frames` 默认 `mode=auto`，不再固定间隔截一堆重复帧。
+  - 连续截图后计算 64×36 HSV 变化分；翻页/切场景抓**切点**，视频/滑动按**运动积分**取帧。
+  - 画面静止时只回一帧（几乎不花 token）；变化很小但非零时补首尾两帧，避免误判。
+  - 挑出的多帧自动拼成**一张图**（带时间戳/序号），比一帧一张图省很多上下文。
+  - 新增 `mode=scene`：每个切点单独出一张满幅图，适合逐页讲解。
+  - 保留 `mode=frames` / `mode=sheet` 旧行为；新增 `frames_motion_*` 阈值配置。
+  - 思路参考 [dsh-see-now](https://github.com/SAOS-3624/dsh-see-now) 的变化量筛选，代码为独立实现。
+
 ## v1.6.4（2026-11-05）
 
 - 新增 **评论去重**：玩手机刷视频时不再重复评论已经评论过的视频。

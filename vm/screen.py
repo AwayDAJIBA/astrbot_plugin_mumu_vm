@@ -2,11 +2,13 @@
 """截图 / 连续采样：把"视频画面"拆成多张带时间戳的图片给 Agent 看。
 
 单帧：adb screencap -p 直接取 PNG。
-连续采样：按 Agent 指定的采样频率/时长/帧数取多帧，支持
-  - mode=frames：一帧一张图（信息量最大，可一次返回多张图）；
-  - mode=sheet ：多帧拼成图版，一帧信息量小但省上下文；
-密集采样（间隔 < 0.8s）走 screenrecord + ffmpeg 抽帧，稀疏采样直接连续 screencap；
-没有 ffmpeg 时自动退化为连续截图。
+连续采样：
+  - mode=auto/motion：连续截图后按变化量挑帧（切点 + 运动积分），静止只回一帧，
+    多帧自动拼成一张图，默认模式；
+  - mode=frames：一帧一张图（信息量最大）；
+  - mode=sheet：按固定间隔采样并拼成图版；
+  - mode=scene：每个切点/场景单独出满幅图；
+默认逐帧 screencap；只有 frames_use_screenrecord=true 才走 screenrecord + ffmpeg 抽帧。
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from . import util
+from . import motion as motion_util
 from .adb import AdbClient, AdbError
 
 try:  # Pillow 随 AstrBot 提供
@@ -413,8 +416,9 @@ class ScreenCapture:
         """按指定采样参数连续取帧，返回多张图片。
 
         采样方式（优先级从高到低）：count（总帧数）> fps（帧/秒）> every（秒/帧）。
-        mode=frames：一帧一张图；mode=sheet：多帧拼成图版（自动按 per_image 分页成多张）。
-        force_screencap=True 时即使间隔很密也用连续截图（避免和后台录屏抢 screenrecord）。
+        mode=auto/motion：按变化量挑帧并拼成一张图（默认）；mode=frames：一帧一张图；
+        mode=sheet：固定间隔拼图版；mode=scene：每个切点单独出图。
+        force_screencap=True 时不会用 screenrecord（动态挑帧本来也不用）。
         """
         if Image is None:
             raise RuntimeError("缺少 Pillow，无法处理截图")
@@ -425,9 +429,19 @@ class ScreenCapture:
         max_images = int(util.clamp(int(max_images or max_images_cfg), 1, 16))
         cols = int(util.clamp(int(cols or 4), 1, 8))
         mode = (mode or "frames").strip().lower()
-        if mode not in ("frames", "sheet", "images", "图", "拼图"):
+        # auto / motion：不按固定间隔，改按变化量挑帧；scene：每个切点单独出图
+        motion_mode = mode in ("auto", "motion", "motion_sheet", "动态", "自动")
+        scene_mode = mode in ("scene", "场景")
+        if mode not in ("frames", "sheet", "images", "图", "拼图") and not (
+            motion_mode or scene_mode
+        ):
             mode = "frames"
-        mode = "sheet" if mode in ("sheet", "拼图") else "frames"
+        if motion_mode:
+            mode = "motion"
+        elif scene_mode:
+            mode = "scene"
+        else:
+            mode = "sheet" if mode in ("sheet", "拼图") else "frames"
         interval = 0.0
         count_i = 0
         if count and float(count) > 0:
@@ -447,6 +461,22 @@ class ScreenCapture:
         interval = max(interval, 1 / 30.0)
         if delay and float(delay) > 0:
             await asyncio.sleep(float(util.clamp(float(delay), 0, 10)))
+
+        # 动态画面：用变化分挑帧，而不是固定间隔。静止时只回一帧，省 token；
+        # 翻页/切场景抓切点；视频/滑动按累计运动量取帧。
+        if mode in ("motion", "scene"):
+            return await self._sample_motion(
+                duration=duration,
+                fps=fps,
+                count=count,
+                mode=mode,
+                cols=cols,
+                width=width,
+                max_images=max_images,
+                annotate=annotate,
+                region=region,
+                force_screencap=force_screencap,
+            )
 
         notes: list[str] = []
         frames: list[tuple["Image.Image", float]] = []
@@ -590,6 +620,206 @@ class ScreenCapture:
             duration=duration,
             mode=mode,
             screen_size=screen_size,
+            notes=notes,
+        )
+
+    async def _capture_motion_sequence(
+        self, duration: float, fps: float, max_raw: int
+    ) -> list[tuple["Image.Image", float]]:
+        """连续 screencap 一段，返回带实际时间戳的帧（不经过 screenrecord）。"""
+        if Image is None:
+            return []
+        fps = float(util.clamp(float(fps or 4.0), 1.0, 10.0))
+        max_raw = int(util.clamp(int(max_raw or 40), 4, 80))
+        interval = 1.0 / fps
+        start = time.time()
+        frames: list[tuple["Image.Image", float]] = []
+        while len(frames) < max_raw:
+            idx = len(frames)
+            target = start + idx * interval
+            wait = target - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            elif idx > 0 and time.time() - start > duration + 0.5:
+                break
+            try:
+                png = await self.adb.screencap_png()
+                img = Image.open(io.BytesIO(png)).convert("RGB")
+            except Exception:
+                break
+            frames.append((img, max(0.0, time.time() - start)))
+            if time.time() - start >= duration:
+                break
+        return frames
+
+    async def _sample_motion(
+        self,
+        *,
+        duration: float,
+        fps: float,
+        count: float,
+        mode: str,
+        cols: int,
+        width: int,
+        max_images: int,
+        annotate: bool,
+        region: str,
+        force_screencap: bool,
+    ) -> SampleResult:
+        """按变化量采帧：切点 + 运动积分；默认拼成一张图，省 token。"""
+        notes: list[str] = []
+        fps = float(
+            util.clamp(
+                float(fps or self._cfg("frames_motion_fps", 4.0) or 4.0), 1.0, 10.0
+            )
+        )
+        max_raw = int(
+            util.clamp(int(self._cfg("frames_motion_max_raw", 40)), 4, 80)
+        )
+        raw = await self._capture_motion_sequence(duration, fps, max_raw)
+        if not raw:
+            raise AdbError("没有采到任何帧")
+        if bool(self._cfg("frames_filter_green", True)):
+            filtered = [(img, ts) for img, ts in raw if not self._looks_green(img)]
+            if len(filtered) < len(raw):
+                notes.append(f"已过滤 {len(raw) - len(filtered)} 张绿屏/异常帧。")
+            raw = filtered
+            if not raw:
+                raise AdbError("采样到的帧都是绿屏/异常帧，请重新采样")
+
+        # 裁剪 region 后再算变化，避免区域外（时钟、状态栏）干扰
+        cropped: list[tuple["Image.Image", float]] = []
+        for img, ts in raw:
+            if region:
+                try:
+                    x, y, w, h = self._parse_region(region, img.width, img.height)
+                    img = img.crop((x, y, x + w, y + h))
+                except Exception:
+                    notes.append(f"region 解析失败，已忽略：{region!r}")
+                    region = ""
+            cropped.append((img, ts))
+        raw = cropped
+
+        max_picks = int(max_images)
+        if count and float(count) > 0:
+            max_picks = min(max_picks, int(util.clamp(int(count), 1, 12)))
+        max_picks = int(util.clamp(max_picks, 1, 12))
+        selection = motion_util.select_motion_frames(
+            raw,
+            cut_abs=float(self._cfg("frames_motion_cut_abs", 12.0)),
+            cut_spike=float(self._cfg("frames_motion_cut_spike", 2.5)),
+            cut_min_gap=float(self._cfg("frames_motion_cut_min_gap", 0.4)),
+            integral_seconds=float(self._cfg("frames_motion_integral_sec", 2.0)),
+            ref_score=float(self._cfg("frames_motion_ref_score", 4.0)),
+            mark_min_gap=float(self._cfg("frames_motion_mark_min_gap", 0.5)),
+            dup_min=float(self._cfg("frames_motion_dup_min", 8.0)),
+            max_picks=max_picks,
+        )
+        picks = selection.picks[:max_picks]
+        if not picks:
+            picks = [motion_util.MotionPick(0, 0.0, "start")]
+        actual_span = max(0.01, raw[-1][1] - raw[0][1])
+        notes.append(
+            f"动态采样：采集 {len(raw)} 帧（约 {len(raw) / max(actual_span, 0.01):.1f}fps），"
+            f"按变化量保留 {len(picks)} 帧（切点 {selection.cuts} / 运动 {selection.motion_marks}）。"
+        )
+        if selection.static:
+            notes.append("画面基本静止：没有生成多帧，只回当前一帧；看视频时先确认播放。")
+        elif selection.weak:
+            notes.append("变化很小：补了首尾两帧，避免把慢速动画误判成静止。")
+
+        selected: list[tuple["Image.Image", float, str, int]] = []
+        for pick in picks:
+            img, ts = raw[pick.index]
+            selected.append((img, ts, pick.reason, pick.index + 1))
+
+        image_width = int(width or self._cfg("frames_image_width", 768))
+        image_width = int(util.clamp(image_width, 200, 1600))
+        images: list[SampleImage] = []
+        sample_times: list[float] = []
+        if mode == "scene":
+            for k, (img, ts, reason, idx) in enumerate(selected[:max_images], start=1):
+                label = f"场景{k} #{idx} t={ts:.2f}s" + (" 切" if reason == "cut" else "")
+                annotated = self._prepare_sample_frame(
+                    img, image_width, label, annotate=bool(annotate)
+                )
+                png, path, mime = self._save_sample_image(annotated, "frame", k)
+                images.append(
+                    SampleImage(
+                        png=png,
+                        path=path,
+                        label=label,
+                        frame_start=idx,
+                        frame_end=idx,
+                        width=annotated.width,
+                        height=annotated.height,
+                        mime=mime,
+                    )
+                )
+                sample_times.append(ts)
+            out_mode = "frames"
+        elif len(selected) == 1:
+            img, ts, reason, idx = selected[0]
+            label = f"#{idx} t={ts:.2f}s " + ("切点" if reason == "cut" else "当前画面")
+            annotated = self._prepare_sample_frame(
+                img, image_width, label, annotate=bool(annotate)
+            )
+            png, path, mime = self._save_sample_image(annotated, "frame", 1)
+            images.append(
+                SampleImage(
+                    png=png,
+                    path=path,
+                    label=label,
+                    frame_start=idx,
+                    frame_end=idx,
+                    width=annotated.width,
+                    height=annotated.height,
+                    mime=mime,
+                )
+            )
+            sample_times.append(ts)
+            out_mode = "frames"
+        else:
+            tile_width = int(self._cfg("frames_sheet_tile_width", 480))
+            tile_width = int(util.clamp(tile_width, 200, 1600))
+            chunk = [(img, ts, 1, idx) for img, ts, _reason, idx in selected]
+            sheet = self._compose_sample_sheet(
+                chunk, cols=cols, tile_width=tile_width, annotate=bool(annotate)
+            )
+            label = (
+                f"动态画面：{len(selected)} 帧"
+                f"（{selected[0][1]:.1f}s~{selected[-1][1]:.1f}s）"
+            )
+            png, path, mime = self._save_sample_image(sheet, "sheet", 1)
+            images.append(
+                SampleImage(
+                    png=png,
+                    path=path,
+                    label=label,
+                    frame_start=selected[0][3],
+                    frame_end=selected[-1][3],
+                    width=sheet.width,
+                    height=sheet.height,
+                    mime=mime,
+                )
+            )
+            sample_times = [item[1] for item in selected]
+            out_mode = "sheet"
+
+        interval = (
+            (sample_times[-1] - sample_times[0]) / max(1, len(sample_times) - 1)
+            if len(sample_times) > 1
+            else 0.0
+        )
+        return SampleResult(
+            images=images,
+            frames_total=len(selected),
+            sample_times=sample_times,
+            method="motion-screencap",
+            interval=interval,
+            duration=max(actual_span, raw[-1][1] if raw else 0.0),
+            mode=out_mode,
+            screen_size=raw[0][0].size,
             notes=notes,
         )
 

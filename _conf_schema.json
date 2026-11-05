@@ -124,6 +124,51 @@
     "description": "连续帧去重阈值（越小越不合并；会同时看平均差和变化像素比例，避免把视频中的小变化误合并）",
     "default": 0.004
   },
+  "frames_motion_fps": {
+    "type": "int",
+    "description": "mode=auto/motion 的采集帧率（每秒抓几帧；越高越不容易漏，但 adb 截图有开销）",
+    "default": 4
+  },
+  "frames_motion_max_raw": {
+    "type": "int",
+    "description": "mode=auto/motion 单次最多抓多少原始帧（只用于挑帧，不全部返回）",
+    "default": 40
+  },
+  "frames_motion_cut_abs": {
+    "type": "float",
+    "description": "切点绝对阈值（0–255 变化分；翻页/换场景通常 >12，滚动约 20–40）",
+    "default": 12.0
+  },
+  "frames_motion_cut_spike": {
+    "type": "float",
+    "description": "切点尖峰倍数：本帧变化分要高于前后帧多少倍才算切场景",
+    "default": 2.5
+  },
+  "frames_motion_cut_min_gap": {
+    "type": "float",
+    "description": "两个切点之间至少隔多少秒",
+    "default": 0.4
+  },
+  "frames_motion_integral_sec": {
+    "type": "float",
+    "description": "运动积分：中等强度画面累计多少秒取一帧（越小越密）",
+    "default": 2.0
+  },
+  "frames_motion_ref_score": {
+    "type": "float",
+    "description": "运动积分参考分（0–255；每帧变化分按它折算成'运动量'）",
+    "default": 4.0
+  },
+  "frames_motion_mark_min_gap": {
+    "type": "float",
+    "description": "两个运动采样点之间至少隔多少秒",
+    "default": 0.5
+  },
+  "frames_motion_dup_min": {
+    "type": "float",
+    "description": "与上一张保留帧的差异小于它就不重复保留（0–255）",
+    "default": 8.0
+  },
   "frames_max_count": {
     "type": "int",
     "description": "连续采样单次最多帧数（Agent 参数 count 的上限）",

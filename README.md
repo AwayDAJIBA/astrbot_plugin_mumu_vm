@@ -21,7 +21,8 @@
 | --- | --- |
 | 🫥 桌面只给 Agent 看 | `MuMuManager control hide_window` 隐藏模拟器窗口，之后全部通过 adb 截图/操作；启动时还会反复确认隐藏，避免窗口弹出来 |
 | 📸 单帧截图 | `mumu_phone_screen` 返回 1280px 宽的 PNG（可裁剪/延迟/叠坐标网格），适合看静态页面 |
-| 🎞 连续采样多帧 | `mumu_phone_frames` 按 Agent 指定的采样参数（`duration` 时长 / `count` 帧数 / `fps` 每秒帧数 / `every` 每几秒一帧）采样，**一次调用返回多张图**（`mode=frames` 一帧一张图，默认；`mode=sheet` 拼图版自动分页），每帧带 `#序号 时间戳` 标签；帧太多时按 `max_images` 分多张图继续给，不再硬塞进一张拼图 |
+| 🎞 动态画面 | `mumu_phone_frames` **默认 mode=auto**：连续截图后按画面变化量挑帧（切点 + 运动积分），静止时只回一帧、视频/滑动只留真正变化的几帧，多帧自动拼成一张图，省 token；也保留 `mode=frames`（一帧一张图）/ `mode=sheet`（固定间隔拼图）/ `mode=scene`（每个切点单独出图） |
+| 💬 评论去重 | `mumu_phone_comment_check` / `mumu_phone_comment_log`：发评论前查这条视频/动态是否评过，评过就划走；标题归一化 + 互相包含匹配 |
 | 🎙 媒体辅助（可选） | 主模型没有语音/视频模态时：`mumu_phone_record_start/stop` **后台录屏**→抽帧交给视觉/全模态模型转述画面；`mumu_phone_hear_start/stop` **后台录音**（WASAPI 进程 loopback，**只录 MuMu 进程自己的声音**，不录 Windows 默认扬声器/其它应用）→STT 转写/音频多模态模型描述声音；三者可同时开启；录制期间仍可正常操作手机、截图/多帧采样 |
 | 🖱 精确操作 | 点击（支持按文字/UI 编号直接点）、长按、滑动/滚动、按键、中文/emoji 输入（自带 ADBKeyboard，自动安装） |
 | 🧭 UI 树 | `mumu_phone_ui` 返回可点击/可输入元素（中心坐标 + flags），比截图找按钮准 |
@@ -41,7 +42,7 @@
 3. （可选）确认宿主机已安装 MuMu 模拟器；插件会自动探测 `MuMuManager.exe` 与 `adb.exe`：
    - 常见位置：`C:\Program Files\Netease\MuMu\nx_main\MuMuManager.exe`
    - 多开/自定义路径可在插件配置里填 `mumu_manager_path` / `adb_path`
-4. （可选但强烈建议）安装 ffmpeg 并在配置里填 `ffmpeg_path`，密集连续采样才走"真·录屏抽帧"（稀疏采样直接连续截图，不依赖 ffmpeg）。
+4. （可选）安装 ffmpeg 并在配置里填 `ffmpeg_path`；连续采样默认逐帧截图，不依赖 ffmpeg（只有 `frames_use_screenrecord=true` 的旧录屏抽帧才需要）。
    Pillow / mcp 随 AstrBot 提供，无需额外装。
 5. （可选）媒体辅助的**录音**需要进程级音频采集：在 AstrBot 运行环境执行 `pip install capturekit`（纯 Python + numpy）；它用 Windows WASAPI **进程 loopback 只抓 MuMu 进程的声音**，不会录 Windows 默认扬声器/其它应用。不装也可以只用录屏/视觉转述；也可用 `media_audio_backend=ffmpeg` + `media_audio_device` 走一台**专用** dshow 设备。
 
@@ -99,7 +100,7 @@
 | `mumu_phone_play` | **由 Agent 自行决定进入手机模式**；进入后本回合工具组立即切为完整手机工具；默认本轮直接操作（`auto_play=false`），`auto_play=true` 时交给后台自主玩 |
 | `mumu_phone_autoplay` | 自主玩：start/stop/status/schedule/list/cancel |
 | `mumu_phone_screen` | 单帧截图（region/max_width/delay/annotate） |
-| `mumu_phone_frames` | 连续采样多帧：`duration` / `count` / `fps` / `every` / `mode=frames\|sheet` / `max_images` / `per_image` / `cols` / `width` / `region` / `delay` / `dedupe` / `annotate`，一帧一张图时一次返回多张带时间戳图片 |
+| `mumu_phone_frames` | 动态画面：默认 `mode=auto` 按变化量挑帧并拼成一张图；支持 `duration` / `count` / `fps` / `every` / `mode=frames\|sheet\|scene` / `max_images` / `per_image` / `cols` / `width` / `region` / `delay` / `dedupe` / `annotate` |
 | `mumu_phone_ui` | UI 元素树（text_contains/only_interactive/max_items） |
 | `mumu_phone_tap` | 点击（坐标 / text / index，可长按、可 observe 回图） |
 | `mumu_phone_swipe` | 滑动（direction 按屏幕比例 / 四点坐标） |
@@ -134,6 +135,9 @@
 | `frames_max_duration_sec` / `frames_max_count` / `frames_max_images` | 20 / 24 / 8 | 连续采样单次时长、帧数、返回图片数上限 |
 | `frames_image_width` / `frames_sheet_tile_width` | 768 / 480 | frames 单帧宽度 / sheet 每格宽度 |
 | `frames_use_screenrecord` / `frames_filter_green` / `frames_dedupe_threshold` | false / true / 0.004 | 是否用录屏抽帧（默认否，改逐帧截图）/ 过滤绿屏帧 / 连续帧去重阈值 |
+| `frames_motion_fps` / `frames_motion_max_raw` | 4 / 40 | auto 动态采样时的采集帧率 / 最多抓多少原始帧 |
+| `frames_motion_cut_abs` / `frames_motion_cut_spike` / `frames_motion_cut_min_gap` | 12 / 2.5 / 0.4 | 切点绝对分 / 尖峰倍数 / 最短间隔 |
+| `frames_motion_integral_sec` / `frames_motion_ref_score` / `frames_motion_mark_min_gap` / `frames_motion_dup_min` | 2.0 / 4.0 / 0.5 / 8.0 | 运动积分秒数 / 参考分 / 采样点间隔 / 去重差异阈值 |
 | `window_hide_mode` | offscreen | 桌面隐藏策略：offscreen（屏幕外保持渲染，视频不中断）或 hide（旧版隐藏） |
 | `phone_chat_memory_enable` / `phone_l1_memory_enable` / `phone_native_history_enable` | true / true / true | 记录手机模式消息/回复：总开关 / 写 iris L1 / 写 AstrBot 原生对话历史 |
 | `phone_memory_inject_ttl_min` / `phone_memory_transcript_limit` / `phone_memory_inject_max_chars` | 180 / 20 / 1600 | 收手后普通聊天注入手机记录的有效分钟数 / 最多条数 / 最大字数 |
@@ -188,7 +192,8 @@
 ## 6. 实现要点
 
 - **窗口隐藏**：默认 `window_hide_mode=offscreen`——把 MuMu 窗口移到屏幕外并保持 `show`，用户桌面上看不到，但模拟器仍认为窗口可见，视频/解码器/渲染不会中断；`window_hide_mode=hide` 是旧版 `hide_window`，部分视频 App 会因 Surface/MediaCodec 被回收而停止播放、抽帧静帧甚至出现绿屏（实测 B 站）。
-- **连续采样**：默认**逐帧 screencap**（时间戳取实际采样时间），避免 MuMu `screenrecord` 在视频/GPU 场景下的绿屏/静帧/时间轴卡帧；可用 `frames_use_screenrecord=true` 切回录屏抽帧（不推荐）。采样结果会自动过滤绿屏帧，并用"平均差 + 变化像素比例"去重，避免视频里的小变化被误合并成静帧。
+- **连续采样**：默认**逐帧 screencap**，`mode=auto` 按画面变化量挑帧（64×36 HSV 变化分 + 切点/运动积分），静止只回一帧、多帧自动拼成一张图；`frames_use_screenrecord=true` 才切回旧录屏抽帧（不推荐）。自动过滤绿屏帧；`mode=frames/sheet` 保留固定间隔逻辑。
+- **动态挑帧参数**：切点默认 `cut_abs=12`、尖峰 2.5 倍；运动积分按"4 分 × 实际 fps × 2 秒"累计，约等于中等运动每 2 秒取一帧。阈值都在配置 `frames_motion_*` 里可调。
 - **精简注入**：`@filter.on_llm_request` 在请求组装后：
   - 手机模式：从 ToolManager **重建**只含 26 个手机工具（+白名单 + 可配置记忆插件工具）的 ToolSet（不依赖其他插件/persona 是否改写过工具集），裁剪 `contexts` 到最近 N 条，清空 `extra_user_content_parts`，追加手机操作提示；
   - 普通模式：移除 16 个重型手机工具，只补 4 个轻量工具。
@@ -211,7 +216,8 @@ astrbot_plugin_mumu_vm/
 └─ vm/
    ├─ mumu.py           # MuMuManager 生命周期（启动/关机/隐藏/设置/adb 端口）
    ├─ adb.py            # adb 封装（截图/录屏/输入/UI dump/应用/系统/通知）
-   ├─ screen.py         # 单帧截图 + 连续采样多帧（多图返回）+ PIL 拼图
+   ├─ screen.py         # 单帧截图 + 连续采样（auto 挑帧、多图返回、PIL 拼图）
+   ├─ motion.py         # 变化分 / 切点 / 运动积分挑帧
    ├─ ui.py             # uiautomator XML → 可点击元素列表 / 文字查找
    ├─ phone.py          # 把 mumu+adb+screen+ui 组合成"一部手机"
    ├─ state.py          # 持久状态：模式/待处理消息/日记/操作记录/经验/预算/定时
@@ -281,6 +287,8 @@ astrbot_plugin_mumu_vm/
 
 完整历史见 [CHANGELOG.md](./CHANGELOG.md)，发布包见 [GitHub Releases](https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm/releases)。
 
+- **v1.6.5**（2026-11-05）：动态画面改为按变化量挑帧——切点 + 运动积分，静止画面只回一帧，多帧自动拼成一张图省 token；参考 dsh-see-now 思路独立实现。
+- **v1.6.4**（2026-11-05）：新增评论去重（`mumu_phone_comment_check/log`，标题归一化匹配），避免重复评论同一条视频。
 - **v1.6.3**（2026-11-03）：修复手机模式期间收到的消息/回复不进上下文——写入 iris L1、AstrBot 原生对话历史，并在收手后的普通聊天注入手机记录。
 - **v1.6.2**（2026-11-03）：修复 B 站等视频抽帧静帧/卡帧/绿屏——默认窗口用 offscreen 保持 Surface/解码器，连续采样改逐帧 screencap，新增绿屏过滤与更稳的去重。
 - **v1.6.1**（2026-10-28）：README 首屏重做 + 10 秒演示 GIF + Release 插件 zip + GitHub topics。

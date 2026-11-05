@@ -42,7 +42,7 @@ from .vm import util
 PLUGIN_NAME = "astrbot_plugin_mumu_vm"
 AUTHOR = "AwayDAJIBA"
 DESC = "让 AI 独占操控一台安卓手机：自己截图、点击、打字"
-VERSION = "v1.6.4"
+VERSION = "v1.6.5"
 
 # 精简模式（普通聊天）下暴露的工具：让 Agent 知道有手机可用，又不占太多上下文
 COMPACT_TOOLS = {
@@ -1437,7 +1437,7 @@ class MumuVmPlugin(Star):
         lines = [
             "# 📱 手机模式（已激活，模拟器窗口隐藏，只有你能看到屏幕）",
             goal_line,
-            "观察：`mumu_phone_screen` 看单帧（静态细节/点按前确认）；`mumu_phone_frames` 连续采样一次返回多张带时间戳的图（看视频/动画/滑动/游戏过程）——参数由你定：duration 采样秒数、count 帧数、fps 每秒帧数、every 每几秒一帧、mode=frames 一帧一张图 / sheet 拼图版、max_images 最多几张图、region 裁剪、delay 等待。看视频时先小段粗看（如 duration=4, fps=2），需要细节再加 fps/count 或裁剪 region 分段看。",
+            "观察：`mumu_phone_screen` 看单帧（静态细节/点按前确认）；`mumu_phone_frames` 看动态画面（视频/动画/滑动/游戏）——默认 mode=auto：按画面变化量挑帧并拼成一张图，静止画面几乎不花 token；mode=frames 一帧一张图、mode=scene 每个切点单独出图。参数：duration 采样秒数、count 目标帧数、fps 采集帧率、every 固定间隔、max_images 最多几张图、region 裁剪、delay 等待。看视频建议 duration=4~8，需要更细时提高 fps/count 或裁 region 分段看。",
             "操作：优先 `mumu_phone_tap`（可传 text/index 直接点元素）；坐标与截图同尺度；`mumu_phone_text` 支持中文；`mumu_phone_app` 打开 App；`mumu_phone_key` 返回键/主页。",
             "消息：只有 @你 或带触发词的消息会被转给你（对方只收到「正在玩手机」）；消息列在下方，想回用 `mumu_phone_say`，不想回就忽略。你收到的消息和发出的回复会写回聊天上下文/iris L1，收手后普通对话能接着聊。",
             "回顾：`mumu_phone_recent` 查看你最近在手机上做过什么（操作记录/日记/统计）。",
@@ -2227,7 +2227,7 @@ class MumuVmPlugin(Star):
     ) -> Any:
         """截取当前手机屏幕（单帧）。返回图片 + 屏幕信息，适合看静态页面。
 
-        动态界面（视频/动画/游戏/滑动过程）请用 mumu_phone_frames 看多帧。
+        动态界面（视频/动画/游戏/滑动过程）请用 mumu_phone_frames 看多帧，默认 mode=auto 会按变化量挑帧。
 
         Args:
             region(string): 可选裁剪区域，格式 "x,y,w,h" 或 "x1,y1,x2,y2"
@@ -2273,7 +2273,7 @@ class MumuVmPlugin(Star):
         fps: float = 0,
         every: float = 0,
         count: float = 0,
-        mode: str = "frames",
+        mode: str = "auto",
         max_images: float = 0,
         per_image: float = 0,
         cols: float = 4,
@@ -2283,27 +2283,30 @@ class MumuVmPlugin(Star):
         region: str = "",
         delay: float = 0,
     ) -> Any:
-        """连续采样屏幕多帧，按时间顺序返回**多张图片**（每帧带时间戳/序号标签），用来"看视频/动画/滑动过程"。
+        """连续采样屏幕多帧，看视频/动画/滑动/游戏过程。
 
-        采样频率三选一（优先级 count > fps > every）：
-          - count：总共采多少帧（按 duration 均分，例如 duration=6, count=12 → 每 0.5s 一帧）；
-          - fps：每秒采几帧（例如 fps=2 → 每 0.5s 一帧）；
-          - every：每几秒采一帧（例如 every=2 → 2s 一帧）。
-        mode=frames：一帧一张图（默认，画面最清楚、信息量最大）；
-        mode=sheet ：多帧拼成图版，按 per_image 自动分成多张图版（省上下文，但每格小、别认小字）。
-        返回张数受 max_images 限制；帧太多时按等间隔挑选并注明。看静态页面用 mumu_phone_screen。
+        默认 mode=auto：不按固定间隔，而是按画面变化量挑帧：
+          - 画面静止 → 只回一帧，几乎不花 token；
+          - 翻页/切场景 → 抓切点；
+          - 视频/滑动持续变化 → 按累计运动量取帧；
+          - 多帧自动拼成一张图（每帧带时间戳/序号），比逐帧发多张图省 token。
+        mode=frames：一帧一张图（信息最全、最费 token）；
+        mode=sheet ：固定间隔拼图版；
+        mode=scene ：每个切点/场景单独出一张满幅图，适合逐页讲解。
+        采样参数三选一（优先级 count > fps > every）；mode=auto 时它们只影响采集节奏/目标帧数。
+        返回张数受 max_images 限制；看静态页面用 mumu_phone_screen。
 
         Args:
-            duration(number): 采样总时长（秒），默认 3，上限由插件配置（默认 20）
-            fps(number): 采样频率：每秒多少帧（如 2=每 0.5 秒一帧；密集画面用 2~10）
-            every(number): 采样频率：每多少秒一帧（如 2=每 2 秒一帧；长视频粗看用）
-            count(number): 总共采多少帧（给了它则按 duration/count 均分，优先于 fps/every）
-            mode(string): frames=一帧一张图（默认）；sheet=多帧拼成图版（自动分成多张）
+            duration(number): 采样总时长（秒），默认 3，上限由插件配置（默认 20）；看视频建议 4~8
+            fps(number): 采集帧率（每秒抓几帧；auto 默认用配置 frames_motion_fps=4）
+            every(number): 固定间隔：每多少秒一帧（仅 mode=sheet/frames 时使用）
+            count(number): 目标帧数（给了它则按 duration/count 均分；auto 时为最多保留帧数）
+            mode(string): auto=按变化量挑帧拼图（默认）；frames=一帧一张图；sheet=固定间隔拼图；scene=逐场景满幅图
             max_images(number): 最多返回几张图（0=用配置默认，通常 8；上限 16）
             per_image(number): sheet 模式每张图最多放几帧（0=cols*2）
             cols(number): sheet 模式每行几格，默认 4
             width(number): 每帧/每格宽度，0=自动（frames 默认 768，sheet 默认 480）
-            dedupe(boolean): 是否合并连续相同帧（静态画面省 token），默认 true
+            dedupe(boolean): frames/sheet 模式是否合并连续相同帧，默认 true
             annotate(boolean): 是否在每帧顶部标注时间戳/帧序号，默认 true
             region(string): 可选裁剪区域 "x,y,w,h"
             delay(number): 采样前等待秒数（等页面加载/动画），0~10
@@ -2328,7 +2331,7 @@ class MumuVmPlugin(Star):
                 fps=float(fps or 0),
                 every=float(every or 0),
                 count=float(count or 0),
-                mode=str(mode or "frames"),
+                mode=str(mode or "auto"),
                 max_images=int(max_images or 0),
                 per_image=int(per_image or 0),
                 cols=int(cols or 4),
