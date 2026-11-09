@@ -42,7 +42,7 @@ from .vm import util
 PLUGIN_NAME = "astrbot_plugin_mumu_vm"
 AUTHOR = "AwayDAJIBA"
 DESC = "让 AI 独占操控一台安卓手机：自己截图、点击、打字"
-VERSION = "v1.6.5"
+VERSION = "v1.6.6"
 
 # 精简模式（普通聊天）下暴露的工具：让 Agent 知道有手机可用，又不占太多上下文
 COMPACT_TOOLS = {
@@ -666,7 +666,12 @@ class MumuVmPlugin(Star):
             session = MessageSession.from_str(umo)
             if session.message_type.value == "GroupMessage":
                 return str(session.session_id or "")
-            uid = str(self.state.owner_sender_id or session.session_id or "")
+            # 私聊：只有 owner 会话使用记录的 sender_id，其它会话用各自 session_id，
+            # 否则广播到多个私聊时会把所有消息都塞进 owner 的 L1 队列。
+            if umo == self.state.owner_umo and self.state.owner_sender_id:
+                uid = str(self.state.owner_sender_id)
+            else:
+                uid = str(session.session_id or "")
             return f"private:{uid}" if uid else ""
         except Exception:
             return ""
@@ -749,50 +754,150 @@ class MumuVmPlugin(Star):
             role, l1_text, event=event, umo=umo, sender_id=sender_id
         )
 
+    async def _recent_chat_sessions(self, hours: float) -> list[dict[str, Any]]:
+        """最近 N 小时内有互动的 AstrBot 会话（按 umo 去重，只取最新 conversation）。"""
+        conversation_manager = getattr(self.context, "conversation_manager", None)
+        if conversation_manager is None:
+            return []
+        now = time.time()
+        limit = int(
+            util.clamp(int(self._cfg("phone_summary_broadcast_max_sessions", 30)), 1, 100)
+        )
+        by_umo: dict[str, dict[str, Any]] = {}
+        try:
+            conversations = await conversation_manager.get_conversations(None)
+        except Exception as exc:
+            self._diag(f"广播手机摘要：读取会话列表失败 {exc!r}")
+            conversations = []
+        for conv in conversations:
+            umo = str(getattr(conv, "user_id", "") or "")
+            if not umo:
+                continue
+            updated = float(getattr(conv, "updated_at", 0) or 0)
+            if updated and now - updated <= float(hours) * 3600.0:
+                old = by_umo.get(umo)
+                if old is None or updated > old["updated_at"]:
+                    by_umo[umo] = {
+                        "umo": umo,
+                        "cid": str(getattr(conv, "cid", "") or ""),
+                        "updated_at": updated,
+                    }
+        owner = self.state.owner_umo
+        if owner:
+            try:
+                owner_cid = await conversation_manager.get_curr_conversation_id(owner)
+            except Exception:
+                owner_cid = ""
+            if owner not in by_umo and owner_cid:
+                by_umo[owner] = {"umo": owner, "cid": owner_cid, "updated_at": now}
+            elif owner in by_umo and not by_umo[owner].get("cid"):
+                by_umo[owner]["cid"] = owner_cid or ""
+        return sorted(
+            by_umo.values(), key=lambda item: item.get("updated_at", 0), reverse=True
+        )[:limit]
+
+    async def _append_system_history(
+        self, umo: str, cid: str, content: str
+    ) -> bool:
+        """给某个会话的 AstrBot 原生历史追加一条 system 消息（DSH 桥等会显示为系统消息）。"""
+        if not umo or not cid or not content.strip():
+            return False
+        conversation_manager = getattr(self.context, "conversation_manager", None)
+        if conversation_manager is None:
+            return False
+        try:
+            conv = await conversation_manager.get_conversation(umo, cid)
+            if conv is None:
+                return False
+            try:
+                history = json.loads(conv.history or "[]")
+            except Exception:
+                history = []
+            if not isinstance(history, list):
+                history = []
+            marker = str(content)[:80]
+            for item in reversed(history[-5:]):
+                try:
+                    if (
+                        str(item.get("role") or "") == "system"
+                        and marker in str(item.get("content") or "")
+                    ):
+                        return True
+                except Exception:
+                    continue
+            history.append({"role": "system", "content": str(content)})
+            await conversation_manager.update_conversation(
+                umo, conversation_id=cid, history=history[-200:]
+            )
+            return True
+        except Exception as exc:
+            self._diag(f"系统消息写入会话失败 umo={umo}: {exc!r}")
+            return False
+
+    async def _broadcast_phone_summary(self, summary: str) -> int:
+        """把手机操作摘要作为系统消息注入最近 24h 有互动的所有会话。"""
+        if not self._phone_memory_enabled():
+            return 0
+        if not bool(self._cfg("phone_summary_broadcast_enable", True)):
+            return 0
+        hours = float(
+            util.clamp(float(self._cfg("phone_summary_broadcast_hours", 24)), 1, 168)
+        )
+        sessions = await self._recent_chat_sessions(hours)
+        if not sessions:
+            self._diag("广播手机摘要：没有找到最近互动会话")
+            return 0
+        max_chars = int(
+            util.clamp(int(self._cfg("phone_summary_broadcast_max_chars", 1200)), 100, 4000)
+        )
+        content = util.truncate(str(summary or "").strip(), max_chars)
+        native = bool(self._cfg("phone_native_history_enable", True))
+        sent = 0
+        for session in sessions:
+            umo = str(session.get("umo") or "")
+            cid = str(session.get("cid") or "")
+            ok = False
+            if self._iris_compat_enabled() and bool(
+                self._cfg("phone_l1_memory_enable", True)
+            ):
+                if await self._iris_l1_add("system", content, umo=umo):
+                    ok = True
+            if native and await self._append_system_history(umo, cid, content):
+                ok = True
+            if ok:
+                sent += 1
+        self._diag(
+            f"广播手机摘要：目标会话 {len(sessions)} 个，成功 {sent} 个，chars={len(content)}"
+        )
+        return sent
+
     async def _remember_phone_session(self, summary: str) -> None:
-        """收手时补一条系统摘要到转录/L1，并写一份到 AstrBot 原生对话历史。"""
+        """收手时补系统摘要到转录/L1，并广播给最近 24h 有互动的所有会话。"""
         if not self._phone_memory_enabled():
             return
-        if str(summary or "").strip():
-            self.state.add_transcript("system", summary.strip(), kind="session")
-            await self._iris_l1_add(
-                "system", summary, umo=self.state.owner_umo
-            )
-        if not bool(self._cfg("phone_native_history_enable", True)):
+        if not str(summary or "").strip():
             return
-        transcript = self.state.transcript_text(
-            limit=int(util.clamp(int(self._cfg("phone_memory_transcript_limit", 20)), 1, 60)),
-            max_chars=int(
-                util.clamp(int(self._cfg("phone_memory_inject_max_chars", 1600)), 200, 6000)
-            ),
-        )
-        if not transcript:
-            return
-        try:
-            conversation_manager = getattr(self.context, "conversation_manager", None)
-            if conversation_manager is None or not self.state.owner_umo:
-                return
-            cid = await conversation_manager.get_curr_conversation_id(
-                self.state.owner_umo
-            )
-            if not cid:
-                return
-            user_content = (
-                "[系统记录：手机模式]\n"
-                "以下是刚刚在手机模式期间收到的消息、我在手机上的回复和操作记录，"
-                "不是用户现在的新指令；后续聊天可据此保持连续：\n" + transcript
-            )
-            assistant_content = (
-                "已记住这次手机模式期间收到的消息、我的回复和操作记录。"
-            )
-            await conversation_manager.add_message_pair(
-                cid,
-                {"role": "user", "content": user_content},
-                {"role": "assistant", "content": assistant_content},
-            )
-            self._diag(f"AstrBot 原生对话历史已写入手机模式记录 cid={cid}")
-        except Exception as exc:
-            self._diag(f"写入 AstrBot 原生对话历史失败: {exc!r}")
+        self.state.add_transcript("system", summary.strip(), kind="session")
+        sent = await self._broadcast_phone_summary(summary)
+        # 广播没找到会话（或广播被关闭）时，至少保证 owner 会话有一条；
+        # 此时不再额外写 user/assistant 对，避免和系统消息重复。
+        if sent == 0:
+            try:
+                await self._iris_l1_add(
+                    "system", summary, umo=self.state.owner_umo
+                )
+                if bool(self._cfg("phone_native_history_enable", True)):
+                    conversation_manager = getattr(self.context, "conversation_manager", None)
+                    if conversation_manager is not None and self.state.owner_umo:
+                        cid = await conversation_manager.get_curr_conversation_id(
+                            self.state.owner_umo
+                        )
+                        if cid:
+                            await self._append_system_history(
+                                self.state.owner_umo, cid, summary
+                            )
+            except Exception as exc:
+                self._diag(f"手机摘要 fallback 写入失败: {exc!r}")
 
     def _phone_memory_context_text(self) -> str:
         if not self._phone_memory_enabled():

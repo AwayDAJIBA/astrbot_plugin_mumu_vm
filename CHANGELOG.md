@@ -2,6 +2,14 @@
 
 完整版本历史。发布包见 [GitHub Releases](https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm/releases)。
 
+## v1.6.6（2026-11-09）
+
+- 手机操作摘要改为**跨会话广播**：收手时把 `[手机操作] ... 结束...` 摘要作为系统消息写入**最近 24 小时内有互动的所有 AstrBot 会话**（包括 dsh_bridge、群聊、私聊），不再只出现在 owner/dsh_bridge 对话里。
+  - 同时写 iris L1 系统消息（保留原有兼容开关）和 AstrBot 原生对话历史的 `system` 消息；DSH 桥等会显示成「系统」卡片。
+  - 按会话 `updated_at` 过滤 24 小时，按 umo 去重取最新 conversation；owner 会话保底包含。
+  - 新增配置：`phone_summary_broadcast_enable`（默认开）、`phone_summary_broadcast_hours`（24）、`phone_summary_broadcast_max_sessions`（30）、`phone_summary_broadcast_max_chars`（1200）。
+  - 修复广播私聊时 L1 会话键误用 owner sender_id 的问题：其它私聊用各自 session_id。
+
 ## v1.6.5（2026-11-05）
 
 - 动态画面采样重做：`mumu_phone_frames` 默认 `mode=auto`，不再固定间隔截一堆重复帧。

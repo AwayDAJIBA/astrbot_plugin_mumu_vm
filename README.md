@@ -23,6 +23,7 @@
 | 📸 单帧截图 | `mumu_phone_screen` 返回 1280px 宽的 PNG（可裁剪/延迟/叠坐标网格），适合看静态页面 |
 | 🎞 动态画面 | `mumu_phone_frames` **默认 mode=auto**：连续截图后按画面变化量挑帧（切点 + 运动积分），静止时只回一帧、视频/滑动只留真正变化的几帧，多帧自动拼成一张图，省 token；也保留 `mode=frames`（一帧一张图）/ `mode=sheet`（固定间隔拼图）/ `mode=scene`（每个切点单独出图） |
 | 💬 评论去重 | `mumu_phone_comment_check` / `mumu_phone_comment_log`：发评论前查这条视频/动态是否评过，评过就划走；标题归一化 + 互相包含匹配 |
+| 🧠 跨会话摘要 | 收手时把 `[手机操作] ... 结束...` 摘要作为系统消息写入最近 24h 有互动的所有会话（dsh_bridge / 群聊 / 私聊），下次聊天能看到 |
 | 🎙 媒体辅助（可选） | 主模型没有语音/视频模态时：`mumu_phone_record_start/stop` **后台录屏**→抽帧交给视觉/全模态模型转述画面；`mumu_phone_hear_start/stop` **后台录音**（WASAPI 进程 loopback，**只录 MuMu 进程自己的声音**，不录 Windows 默认扬声器/其它应用）→STT 转写/音频多模态模型描述声音；三者可同时开启；录制期间仍可正常操作手机、截图/多帧采样 |
 | 🖱 精确操作 | 点击（支持按文字/UI 编号直接点）、长按、滑动/滚动、按键、中文/emoji 输入（自带 ADBKeyboard，自动安装） |
 | 🧭 UI 树 | `mumu_phone_ui` 返回可点击/可输入元素（中心坐标 + flags），比截图找按钮准 |
@@ -142,6 +143,8 @@
 | `phone_chat_memory_enable` / `phone_l1_memory_enable` / `phone_native_history_enable` | true / true / true | 记录手机模式消息/回复：总开关 / 写 iris L1 / 写 AstrBot 原生对话历史 |
 | `phone_memory_inject_ttl_min` / `phone_memory_transcript_limit` / `phone_memory_inject_max_chars` | 180 / 20 / 1600 | 收手后普通聊天注入手机记录的有效分钟数 / 最多条数 / 最大字数 |
 | `phone_l1_max_chars` / `iris_plugin_name` | 450 / astrbot_plugin_iris_memory | 写入 iris L1 的单条字数上限 / iris 插件名 |
+| `phone_summary_broadcast_enable` / `phone_summary_broadcast_hours` | true / 24 | 收手摘要是否广播给最近有互动的所有会话 / 时间窗口（小时） |
+| `phone_summary_broadcast_max_sessions` / `phone_summary_broadcast_max_chars` | 30 / 1200 | 单次最多广播多少个会话 / 每条消息最大字数 |
 | `media_assist_enable` | false | 媒体辅助总开关（关=不给 Agent 暴露录屏/录音工具） |
 | `stt_assist_enable` / `audio_llm_assist_enable` / `omni_assist_enable` | false / false / false | 三个可同时开启的转述能力：STT 转写 / 音频模型描述 / 视觉(全模态)转述 |
 | `stt_provider_id` / `audio_llm_provider_id` / `omni_provider_id` | 空 | 分别指定 Provider；留空自动选择（音频建议显式指定，见下方注意事项） |
@@ -194,6 +197,7 @@
 - **窗口隐藏**：默认 `window_hide_mode=offscreen`——把 MuMu 窗口移到屏幕外并保持 `show`，用户桌面上看不到，但模拟器仍认为窗口可见，视频/解码器/渲染不会中断；`window_hide_mode=hide` 是旧版 `hide_window`，部分视频 App 会因 Surface/MediaCodec 被回收而停止播放、抽帧静帧甚至出现绿屏（实测 B 站）。
 - **连续采样**：默认**逐帧 screencap**，`mode=auto` 按画面变化量挑帧（64×36 HSV 变化分 + 切点/运动积分），静止只回一帧、多帧自动拼成一张图；`frames_use_screenrecord=true` 才切回旧录屏抽帧（不推荐）。自动过滤绿屏帧；`mode=frames/sheet` 保留固定间隔逻辑。
 - **动态挑帧参数**：切点默认 `cut_abs=12`、尖峰 2.5 倍；运动积分按"4 分 × 实际 fps × 2 秒"累计，约等于中等运动每 2 秒取一帧。阈值都在配置 `frames_motion_*` 里可调。
+- **手机摘要跨会话广播**：收手时枚举 AstrBot 会话（按 `updated_at` 过滤最近 24h、按 umo 去重），把 `[手机操作] ... 结束...` 作为 system 消息写入每个会话的 AstrBot 原生历史；iris 开着时同时写各自会话的 L1。这样 dsh_bridge、群聊、私聊下次被唤醒时都知道刚刚手机玩了什么。
 - **精简注入**：`@filter.on_llm_request` 在请求组装后：
   - 手机模式：从 ToolManager **重建**只含 26 个手机工具（+白名单 + 可配置记忆插件工具）的 ToolSet（不依赖其他插件/persona 是否改写过工具集），裁剪 `contexts` 到最近 N 条，清空 `extra_user_content_parts`，追加手机操作提示；
   - 普通模式：移除 16 个重型手机工具，只补 4 个轻量工具。
@@ -287,6 +291,7 @@ astrbot_plugin_mumu_vm/
 
 完整历史见 [CHANGELOG.md](./CHANGELOG.md)，发布包见 [GitHub Releases](https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm/releases)。
 
+- **v1.6.6**（2026-11-09）：手机操作摘要跨会话广播——收手时把 `[手机操作]` 摘要作为系统消息写入最近 24h 有互动的所有会话（含 dsh_bridge/群聊/私聊），不再只出现在 owner 对话。
 - **v1.6.5**（2026-11-05）：动态画面改为按变化量挑帧——切点 + 运动积分，静止画面只回一帧，多帧自动拼成一张图省 token；参考 dsh-see-now 思路独立实现。
 - **v1.6.4**（2026-11-05）：新增评论去重（`mumu_phone_comment_check/log`，标题归一化匹配），避免重复评论同一条视频。
 - **v1.6.3**（2026-11-03）：修复手机模式期间收到的消息/回复不进上下文——写入 iris L1、AstrBot 原生对话历史，并在收手后的普通聊天注入手机记录。
