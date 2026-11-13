@@ -1,4 +1,8 @@
 # Pillow / mcp 随 AstrBot 本体提供，无需额外安装。
+# 玩手机时静音 MuMu 的 Windows 音频会话（只静音 MuMu，不影响用户其它应用）：
+# pycaw 依赖 comtypes，Windows only。缺失时静音功能自动跳过，不影响其它功能。
+pycaw>=20240202
+
 # 可选：音频辅助（只录 MuMu 进程声音）需要 capturekit + numpy：
 #   pip install capturekit
 # capturekit 是纯 Python + ctypes 包，通过 Windows WASAPI 进程 loopback 只抓

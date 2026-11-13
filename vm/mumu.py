@@ -157,28 +157,66 @@ class MuMuController:
 
     # ------------------------------------------------------------------ 启停
     async def launch(self) -> None:
-        rc, out, err = await self._manager(
-            "control", "-v", str(self.vm_index), "launch", timeout=120
+        # 先把「快速隐藏窗口」的循环放出去，再启动模拟器：
+        # MuMu 启动瞬间会弹出主窗口，等 launch 返回再 hide 会让用户看到几秒。
+        previous_foreground = self._foreground_window()
+        hide_task = asyncio.create_task(
+            self._hide_loop(previous_foreground=previous_foreground)
         )
+        try:
+            rc, out, err = await self._manager(
+                "control", "-v", str(self.vm_index), "launch", timeout=120
+            )
+        except Exception:
+            hide_task.cancel()
+            raise
         if rc != 0:
+            hide_task.cancel()
             raise MuMuError(f"启动模拟器失败: {util.truncate(out or err, 300)}")
-        # 启动后立即尝试隐藏窗口（窗口出现前调用会失败，所以轮询）
-        asyncio.create_task(self._hide_loop())
 
-    async def _hide_loop(self, timeout: float = 60) -> None:
+    async def _hide_loop(
+        self, timeout: float = 90, previous_foreground: int = 0
+    ) -> None:
+        """启动阶段快速藏窗口（轮询 80ms），Android 起来后改成屏幕外显示。
+
+        不能等 launch 命令返回再 hide：MuMu 会先把主窗口摆到桌面上，用户正在
+        打游戏时这个窗口会弹出来抢焦点。这里在 launch 还没返回时就开始每 80ms
+        把任何可见的 MuMu 窗口移出屏幕/隐藏；Android 启动完成后用
+        SW_SHOWNOACTIVATE 在屏幕外恢复显示，不抢前台焦点。
+        """
         if not self._cfg("keep_window_hidden", True):
             return
         deadline = time.time() + timeout
+        last_check = 0.0
         while time.time() < deadline:
-            ok = await self.hide_for_agent(quiet=True)
-            if ok:
-                # 再确认两次，防止窗口在完全初始化后又弹出来
-                await asyncio.sleep(3)
-                await self.hide_for_agent(quiet=True)
-                await asyncio.sleep(3)
-                await self.hide_for_agent(quiet=True)
+            try:
+                self._move_windows_offscreen()
+                self._hide_windows()
+                # MuMu 启动时可能抢走前台；尽量把用户原来的游戏窗口还回去
+                if previous_foreground and self._foreground_is_mumu():
+                    self._restore_foreground(previous_foreground)
+            except Exception:
+                pass
+            await asyncio.sleep(0.06)
+            now = time.time()
+            if now - last_check < 1.0:
+                continue
+            last_check = now
+            try:
+                started = await self.is_android_started()
+            except Exception:
+                started = False
+            if started:
+                # 启动完成后再恢复屏幕外渲染；不激活、不抢游戏焦点
+                try:
+                    await self.hide_for_agent(quiet=True)
+                    await asyncio.sleep(1.0)
+                    await self.hide_for_agent(quiet=True)
+                    if previous_foreground and self._foreground_is_mumu():
+                        self._restore_foreground(previous_foreground)
+                except Exception:
+                    pass
                 return
-            await asyncio.sleep(1.5)
 
     def window_hide_mode(self) -> str:
         """窗口隐藏策略：offscreen（默认，保持渲染/视频）或 hide（真正隐藏）。"""
@@ -224,12 +262,33 @@ class MuMuController:
     # 同时画面不继续渲染，抽帧就会得到静帧。这里提供"移到屏幕外但保持 show"
     # 的隐藏方式：用户桌面看不到窗口，但 Android/模拟器认为它可见，视频继续播放。
     @staticmethod
+    def _mumu_process_ids() -> set[int]:
+        """MuMu 相关进程 PID（含无标题的渲染窗口进程），缓存 2 秒。"""
+        now = time.time()
+        cached = getattr(MuMuController, "_mumu_pid_cache", None)
+        if cached and now - float(cached[0]) < 2.0:
+            return set(cached[1])
+        pids: set[int] = set()
+        try:
+            import psutil
+
+            for proc in psutil.process_iter(["pid", "name"]):
+                name = str((proc.info or {}).get("name") or "").lower()
+                if "mumu" in name or "nxdevice" in name or "nxmain" in name:
+                    pids.add(int(proc.info["pid"]))
+        except Exception:
+            pass
+        MuMuController._mumu_pid_cache = (now, set(pids))
+        return pids
+
+    @staticmethod
     def _iter_mumu_windows() -> list[tuple[int, str, bool]]:
         try:
             import ctypes
             from ctypes import wintypes
 
             user32 = ctypes.windll.user32
+            mumu_pids = MuMuController._mumu_process_ids()
             windows: list[tuple[int, str, bool]] = []
 
             def _callback(hwnd, _lparam):
@@ -237,8 +296,20 @@ class MuMuController:
                 buffer = ctypes.create_unicode_buffer(length + 1)
                 user32.GetWindowTextW(hwnd, buffer, length + 1)
                 title = buffer.value
-                if title and ("MuMu" in title or "模拟器" in title):
-                    windows.append((int(hwnd), title, bool(user32.IsWindowVisible(hwnd))))
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                # 优先按 MuMu 进程 PID 判断，避免把标题里恰好带 “MuMu” 的
+                # 浏览器/AstrBot WebUI 窗口一起隐藏或移出屏幕。
+                by_pid = int(pid.value) in mumu_pids
+                known_title = title in ("MuMu安卓设备", "MuMu模拟器") or title.startswith(
+                    "MuMuPlayer"
+                )
+                by_title = (not mumu_pids) and (
+                    known_title or (bool(title) and "MuMu" in title and "模拟器" in title)
+                )
+                if by_pid or by_title:
+                    label = title or f"MuMu#{int(hwnd)}"
+                    windows.append((int(hwnd), label, bool(user32.IsWindowVisible(hwnd))))
                 return True
 
             user32.EnumWindows(
@@ -250,6 +321,70 @@ class MuMuController:
             return windows
         except Exception:
             return []
+
+    @staticmethod
+    def _foreground_window() -> int:
+        try:
+            import ctypes
+
+            return int(ctypes.windll.user32.GetForegroundWindow() or 0)
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _restore_foreground(hwnd: int) -> None:
+        if not hwnd:
+            return
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            if not user32.IsWindow(hwnd):
+                return
+            if int(user32.GetForegroundWindow() or 0) == int(hwnd):
+                return
+            current = int(user32.GetForegroundWindow() or 0)
+            current_thread = 0
+            if current:
+                current_thread = int(
+                    user32.GetWindowThreadProcessId(current, None) or 0
+                )
+            self_thread = int(kernel32.GetCurrentThreadId())
+            attached = False
+            if current_thread and current_thread != self_thread:
+                try:
+                    attached = bool(
+                        user32.AttachThreadInput(self_thread, current_thread, True)
+                    )
+                except Exception:
+                    attached = False
+            try:
+                user32.SetForegroundWindow(hwnd)
+            finally:
+                if attached:
+                    try:
+                        user32.AttachThreadInput(self_thread, current_thread, False)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    @classmethod
+    def _foreground_is_mumu(cls) -> bool:
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return False
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            return int(pid.value) in cls._mumu_process_ids()
+        except Exception:
+            return False
 
     @classmethod
     def _move_windows_offscreen(cls) -> list[str]:
@@ -268,6 +403,30 @@ class MuMuController:
             return []
 
     @classmethod
+    def _show_windows_noactivate(cls) -> list[str]:
+        """用 SW_SHOWNOACTIVATE 显示 MuMu 窗口，避免抢用户游戏的前台焦点。"""
+        shown: list[str] = []
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            for hwnd, title, _visible in cls._iter_mumu_windows():
+                user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
+                user32.SetWindowPos(
+                    hwnd,
+                    0,
+                    -32000,
+                    -32000,
+                    0,
+                    0,
+                    0x0001 | 0x0004 | 0x0010 | 0x0040,  # NOSIZE|NOZORDER|NOACTIVATE|SHOWWINDOW
+                )
+                shown.append(title)
+        except Exception:
+            return []
+        return shown
+
+    @classmethod
     def _hide_windows(cls) -> list[str]:
         try:
             import ctypes
@@ -283,15 +442,25 @@ class MuMuController:
             return []
 
     async def show_offscreen(self) -> list[str]:
-        """把所有 MuMu 窗口移到屏幕外再 show，保持模拟器渲染/视频可见。"""
+        """把所有 MuMu 窗口移到屏幕外并显示，且不抢当前游戏的前台焦点。"""
+        previous = self._foreground_window()
         self._move_windows_offscreen()
-        ok = await self.show_window()
+        shown = self._show_windows_noactivate()
         await asyncio.sleep(0.25)
-        # show 可能把窗口恢复回原位置，再移一次，确保用户看不到
-        moved = self._move_windows_offscreen()
-        if not ok and self.logger:
+        self._move_windows_offscreen()
+        visible = [title for _, title, vis in self._iter_mumu_windows() if vis]
+        if visible:
+            return shown or visible
+        # 直接 ShowWindow 没有恢复渲染时，退回 MuMuManager show，但马上把前台还给用户
+        async with self._lock:
+            ok = await self.show_window()
+        await asyncio.sleep(0.25)
+        self._move_windows_offscreen()
+        if ok:
+            self._restore_foreground(previous)
+        if self.logger and not ok:
             self.logger.warning("MuMu 屏幕外显示失败（show_window 返回失败）")
-        return moved
+        return shown
 
     async def hide_all_windows(self) -> list[str]:
         """恢复真正隐藏：hide_window + 隐藏所有 MuMu 窗口（含启动器）。"""

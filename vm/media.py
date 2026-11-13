@@ -362,13 +362,10 @@ class PhoneMedia:
         try:
             hwnd = self._mumu_window_handle(pid)
             self._audio_window_handle = hwnd
-            # 先在所有窗口（含隐藏窗口）上设好屏幕外位置，再 show，避免闪一下
-            self._move_mumu_windows_offscreen()
-            await self.plugin.phone.mumu.show_window()
-            await asyncio.sleep(0.25)
-            moved = self._move_mumu_windows_offscreen()
+            # 屏幕外、不激活地恢复显示，避免抢用户在游戏里的前台焦点
+            moved = await self.plugin.phone.mumu.show_offscreen()
             self._diag(
-                f"media 录音：已将 MuMu 窗口移到屏幕外以恢复音频渲染（{', '.join(moved) or '未找到窗口'}）"
+                f"media 录音：屏幕外显示 MuMu 以恢复音频渲染（{', '.join(moved) or '未找到窗口'}）"
             )
         except Exception as exc:
             self._diag(f"media 录音：恢复 MuMu 窗口失败（可能录到静音）: {util.truncate(repr(exc), 160)}")
@@ -543,6 +540,11 @@ class PhoneMedia:
                 ),
                 name="mumu-media-audio",
             )
+            # 平时 MuMu 音频已被静音；录音需要临时解除，否则进程 loopback 可能是静音。
+            try:
+                await self.plugin.audio_muter.pause()
+            except Exception:
+                pass
             why = f"{why}，目标进程 {process_name}(pid={pid})"
         else:
             ff = util.guess_ffmpeg(str(self._cfg("ffmpeg_path", "")))
@@ -569,6 +571,10 @@ class PhoneMedia:
                 stderr=asyncio.subprocess.PIPE,
             )
             self._audio_task = asyncio.create_task(self._audio_proc.wait(), name="mumu-media-audio")
+            try:
+                await self.plugin.audio_muter.pause()
+            except Exception:
+                pass
         self._ensure_heartbeat()
         return MediaStart(
             True,
@@ -580,6 +586,10 @@ class PhoneMedia:
     async def stop_audio(self) -> MediaStart:
         if not self._audio_task:
             await self._audio_window_end()
+            try:
+                await self.plugin.audio_muter.resume()
+            except Exception:
+                pass
             return MediaStart(False, "当前没有在录音")
         task = self._audio_task
         if self._audio_stop is not None:
@@ -602,6 +612,11 @@ class PhoneMedia:
         self._audio_task = None
         self._audio_pid = None
         await self._audio_window_end()
+        # 录音结束，恢复玩手机期间的 MuMu 静音
+        try:
+            await self.plugin.audio_muter.resume()
+        except Exception:
+            pass
         path = self._audio_path
         self._audio_path = None
         self._maybe_stop_heartbeat()

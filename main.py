@@ -37,12 +37,13 @@ from .vm.media import PhoneMedia
 from .vm.memory import LocalMemoryStore
 from .vm.phone import Phone
 from .vm.state import SessionState
+from .vm.win_audio import MuMuAudioMuter
 from .vm import util
 
 PLUGIN_NAME = "astrbot_plugin_mumu_vm"
 AUTHOR = "AwayDAJIBA"
 DESC = "让 AI 独占操控一台安卓手机：自己截图、点击、打字"
-VERSION = "v1.6.6"
+VERSION = "v1.6.7"
 
 # 精简模式（普通聊天）下暴露的工具：让 Agent 知道有手机可用，又不占太多上下文
 COMPACT_TOOLS = {
@@ -107,6 +108,9 @@ class MumuVmPlugin(Star):
         )
         self.autoplay = AutoplayEngine(self)
         self.media = PhoneMedia(self)
+        self.audio_muter = MuMuAudioMuter(
+            self.config, logger=self.logger, diag=self._diag
+        )
         self.local_memory = LocalMemoryStore(self)
         self._bg_task: asyncio.Task | None = None
         # 当前正在跑的普通 Agent 请求（umo -> ProviderRequest）。
@@ -183,6 +187,10 @@ class MumuVmPlugin(Star):
             await self.autoplay.stop(reason="插件卸载", notify=False)
             try:
                 await self.media.abort_all()
+            except Exception:
+                pass
+            try:
+                await self.audio_muter.stop()
             except Exception:
                 pass
             if self.state.active and bool(self._cfg("shutdown_on_exit", True)):
@@ -341,6 +349,12 @@ class MumuVmPlugin(Star):
     ) -> None:
         minutes = float(util.clamp(float(minutes or 20), 1, 240))
         self.state.begin(goal=goal, source=source, minutes=minutes, auto_continue=auto_continue)
+        # MuMu 窗口用 offscreen 保持视频渲染，因此音频会从 Windows 默认输出播出来。
+        # 玩手机期间把 MuMu 进程的音频会话静音（只静音 MuMu，不影响用户的游戏/音乐）。
+        try:
+            await self.audio_muter.start()
+        except Exception as exc:
+            self._diag(f"启动 MuMu 音频静音失败: {exc!r}")
         self.logger.info(
             f"进入手机模式: goal={goal!r} minutes={minutes:g} source={source}"
         )
@@ -448,6 +462,11 @@ class MumuVmPlugin(Star):
             await self.media.abort_all()
         except Exception as exc:
             self._diag(f"收尾清理媒体录制失败: {exc!r}")
+        # 恢复 MuMu 音频会话原本的静音状态（用户自己的游戏/音乐不受影响）
+        try:
+            await self.audio_muter.stop()
+        except Exception as exc:
+            self._diag(f"恢复 MuMu 音频状态失败: {exc!r}")
         pending = self.state.unhandled_pending()
         stop_vm = bool(self._cfg("shutdown_on_exit", True))
         if stop_vm_override is not None:

@@ -140,6 +140,7 @@
 | `frames_motion_cut_abs` / `frames_motion_cut_spike` / `frames_motion_cut_min_gap` | 12 / 2.5 / 0.4 | 切点绝对分 / 尖峰倍数 / 最短间隔 |
 | `frames_motion_integral_sec` / `frames_motion_ref_score` / `frames_motion_mark_min_gap` / `frames_motion_dup_min` | 2.0 / 4.0 / 0.5 / 8.0 | 运动积分秒数 / 参考分 / 采样点间隔 / 去重差异阈值 |
 | `window_hide_mode` | offscreen | 桌面隐藏策略：offscreen（屏幕外保持渲染，视频不中断）或 hide（旧版隐藏） |
+| `mute_mumu_audio` / `mute_mumu_audio_keywords` / `mute_mumu_audio_poll_sec` | true / mumu / 1.0 | 玩手机时只静音 MuMu 的 Windows 音频会话（不影响用户游戏/音乐；需 pycaw）/ 进程关键字 / 轮询秒数 |
 | `phone_chat_memory_enable` / `phone_l1_memory_enable` / `phone_native_history_enable` | true / true / true | 记录手机模式消息/回复：总开关 / 写 iris L1 / 写 AstrBot 原生对话历史 |
 | `phone_memory_inject_ttl_min` / `phone_memory_transcript_limit` / `phone_memory_inject_max_chars` | 180 / 20 / 1600 | 收手后普通聊天注入手机记录的有效分钟数 / 最多条数 / 最大字数 |
 | `phone_l1_max_chars` / `iris_plugin_name` | 450 / astrbot_plugin_iris_memory | 写入 iris L1 的单条字数上限 / iris 插件名 |
@@ -194,10 +195,11 @@
 
 ## 6. 实现要点
 
-- **窗口隐藏**：默认 `window_hide_mode=offscreen`——把 MuMu 窗口移到屏幕外并保持 `show`，用户桌面上看不到，但模拟器仍认为窗口可见，视频/解码器/渲染不会中断；`window_hide_mode=hide` 是旧版 `hide_window`，部分视频 App 会因 Surface/MediaCodec 被回收而停止播放、抽帧静帧甚至出现绿屏（实测 B 站）。
+- **窗口隐藏**：默认 `window_hide_mode=offscreen`——启动时 launch 尚未返回就每 60ms 把可见 MuMu 窗口移出屏幕/隐藏，Android 起来后用 `SW_SHOWNOACTIVATE` 在屏幕外恢复渲染，避免弹窗、抢用户游戏的前台焦点；`window_hide_mode=hide` 是旧版 `hide_window`，会中断视频/解码器。
 - **连续采样**：默认**逐帧 screencap**，`mode=auto` 按画面变化量挑帧（64×36 HSV 变化分 + 切点/运动积分），静止只回一帧、多帧自动拼成一张图；`frames_use_screenrecord=true` 才切回旧录屏抽帧（不推荐）。自动过滤绿屏帧；`mode=frames/sheet` 保留固定间隔逻辑。
 - **动态挑帧参数**：切点默认 `cut_abs=12`、尖峰 2.5 倍；运动积分按"4 分 × 实际 fps × 2 秒"累计，约等于中等运动每 2 秒取一帧。阈值都在配置 `frames_motion_*` 里可调。
 - **手机摘要跨会话广播**：收手时枚举 AstrBot 会话（按 `updated_at` 过滤最近 24h、按 umo 去重），把 `[手机操作] ... 结束...` 作为 system 消息写入每个会话的 AstrBot 原生历史；iris 开着时同时写各自会话的 L1。这样 dsh_bridge、群聊、私聊下次被唤醒时都知道刚刚手机玩了什么。
+- **后台不打扰用户**：玩手机期间只静音 MuMu 的 Windows 音频会话（pycaw），用户自己的游戏/BGM/耳机不受影响；启动时快速藏窗口、屏幕外无激活显示，不抢前台焦点。录音时临时解除静音，结束恢复。
 - **精简注入**：`@filter.on_llm_request` 在请求组装后：
   - 手机模式：从 ToolManager **重建**只含 26 个手机工具（+白名单 + 可配置记忆插件工具）的 ToolSet（不依赖其他插件/persona 是否改写过工具集），裁剪 `contexts` 到最近 N 条，清空 `extra_user_content_parts`，追加手机操作提示；
   - 普通模式：移除 16 个重型手机工具，只补 4 个轻量工具。
@@ -291,6 +293,7 @@ astrbot_plugin_mumu_vm/
 
 完整历史见 [CHANGELOG.md](./CHANGELOG.md)，发布包见 [GitHub Releases](https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm/releases)。
 
+- **v1.6.7**（2026-11-13）：后台玩手机时只静音 MuMu 音频（不影响用户游戏/音乐），并修复启动弹窗/抢前台焦点；录屏渲染改用屏幕外无激活显示。
 - **v1.6.6**（2026-11-09）：手机操作摘要跨会话广播——收手时把 `[手机操作]` 摘要作为系统消息写入最近 24h 有互动的所有会话（含 dsh_bridge/群聊/私聊），不再只出现在 owner 对话。
 - **v1.6.5**（2026-11-05）：动态画面改为按变化量挑帧——切点 + 运动积分，静止画面只回一帧，多帧自动拼成一张图省 token；参考 dsh-see-now 思路独立实现。
 - **v1.6.4**（2026-11-05）：新增评论去重（`mumu_phone_comment_check/log`，标题归一化匹配），避免重复评论同一条视频。

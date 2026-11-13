@@ -2,6 +2,15 @@
 
 完整版本历史。发布包见 [GitHub Releases](https://github.com/AwayDAJIBA/astrbot_plugin_mumu_vm/releases)。
 
+## v1.6.7（2026-11-13）
+
+- 修复**用户在打游戏/戴耳机时，后台玩手机会有声音、窗口还会弹出来抢操作**：
+  - 玩手机期间只静音 **MuMu 进程的 Windows 音频会话**（pycaw / `SimpleAudioVolume.SetMute`），用户的游戏、音乐、耳机完全不受影响；退出手机模式后恢复 MuMu 原来静音状态。
+  - 音频静音线程每秒检查新出现的 MuMu 音频会话，视频/音频中途启动也能盖住；`mumu_phone_hear_start` 录音时临时解除静音，录完恢复。
+  - 启动 MuMu 时 launch 尚未返回就开始每 60ms 把可见窗口移出屏幕/隐藏，Android 起来后用 `SW_SHOWNOACTIVATE` 在屏幕外恢复渲染，避免弹窗和抢前台焦点。
+  - 窗口枚举按 MuMu 进程 PID（不只按标题），能覆盖无标题的渲染窗口。
+  - 新增配置：`mute_mumu_audio`（默认开）、`mute_mumu_audio_keywords`、`mute_mumu_audio_poll_sec`。
+
 ## v1.6.6（2026-11-09）
 
 - 手机操作摘要改为**跨会话广播**：收手时把 `[手机操作] ... 结束...` 摘要作为系统消息写入**最近 24 小时内有互动的所有 AstrBot 会话**（包括 dsh_bridge、群聊、私聊），不再只出现在 owner/dsh_bridge 对话里。

@@ -119,6 +119,21 @@
     "description": "桌面隐藏策略：offscreen（默认，把 MuMu 窗口移到屏幕外并保持渲染/视频播放，用户看不到）或 hide（旧版 hide_window，会暂停视频/可能静帧）",
     "default": "offscreen"
   },
+  "mute_mumu_audio": {
+    "type": "bool",
+    "description": "玩手机时静音 MuMu 的 Windows 音频会话（只静音 MuMu，不影响用户自己的游戏/音乐/耳机；需要 pycaw）",
+    "default": true
+  },
+  "mute_mumu_audio_keywords": {
+    "type": "string",
+    "description": "要静音的 MuMu 音频进程名关键字（逗号分隔，默认 mumu）",
+    "default": "mumu"
+  },
+  "mute_mumu_audio_poll_sec": {
+    "type": "float",
+    "description": "检查/静音新出现的 MuMu 音频会话的间隔（秒）",
+    "default": 1.0
+  },
   "frames_dedupe_threshold": {
     "type": "float",
     "description": "连续帧去重阈值（越小越不合并；会同时看平均差和变化像素比例，避免把视频中的小变化误合并）",
